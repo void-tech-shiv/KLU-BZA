@@ -9,6 +9,7 @@ LOGIN = '''<form id="login-form" action="/index.php?r=site%2Flogin"><input type=
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8//8/AwMDEwMDAwMDAwAkBgMB/DXemwAAAABJRU5ErkJggg==')
 TABLE = '''<table><thead><tr><th>Coursecode</th><th>Coursedesc</th><th>Ltps</th><th>Total Conducted</th><th>Total Attended</th></tr></thead><tbody><tr><td>A</td><td>Algorithms</td><td>L</td><td>20</td><td>18</td></tr><tr><td>A</td><td>Algorithms</td><td>P</td><td>0</td><td>0</td></tr></tbody></table>'''
 FILTERS = '''<form action="/index.php?r=student%2Fattendance" method="get"><select name="Attendance[academicyear]"><option value="">Select</option><option value="26">2026-2027</option></select><select name="Attendance[semesterid]"><option value="1">Odd Sem</option></select></form>'''
+FILTERS_WITH_SEARCH = FILTERS.replace('</form>', '<button name="yt0" type="submit" value="Search">Search</button></form>')
 
 def test_login_fields_and_csrf():
     action, hidden, image = erp.login_form(LOGIN)
@@ -87,6 +88,9 @@ def test_api_flow_and_session_isolation(monkeypatch):
         elif 'site%2Flogin' in path:
             assert kwargs['data']['LoginForm[password]']=='test-only-password'
             assert kwargs['data']['_csrf']=='csrf'
+            assert kwargs['data']['LoginForm[qr_code]']==''
+            assert kwargs['headers']['Origin']==erp.ORIGIN
+            assert kwargs['headers']['Referer']==erp.ORIGIN+'/'
             text='<a href="/logout">Logout</a><a href="/attendance">Attendance Register</a>'
         elif path.endswith('/attendance'): text=FILTERS
         else:
@@ -141,3 +145,517 @@ def test_wrong_login_and_mfa_do_not_authenticate(monkeypatch):
         assert r.status_code==422 and 'secret-value' not in r.text
         session.created-=main.TTL+1
         assert c.get('/api/filters',headers=headers).status_code==401
+
+
+def test_optional_stakeholder_lookup_fails_over_to_official_login(monkeypatch):
+    """Fallback never invents authentication; official ERP still decides."""
+    main.rates.clear()
+    posted = []
+    async def fake(client, method, path, **kwargs):
+        if 'get-stakeholder-id' in path:
+            raise httpx.HTTPStatusError(
+                'Lookup temporarily unavailable',
+                request=httpx.Request('POST', erp.ORIGIN+'/lookup'),
+                response=httpx.Response(503),
+            )
+        if 'site%2Flogin' in path:
+            posted.append(kwargs['data'])
+            return httpx.Response(200, text=LOGIN)
+        if method == 'GET' and path == '/':
+            # A failed ERP sign-in still presents the public login screen.
+            return httpx.Response(200, text=LOGIN)
+        raise AssertionError('Unexpected ERP endpoint')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['fallback-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/index.php?r=site%2Flogin',
+            hidden={'_csrf': 'fixture-csrf'},
+        )
+        result = c.post('/api/login',
+                        headers={'Authorization': 'Bearer fallback-test'},
+                        json={'student_id': '123', 'password': 'private-password',
+                              'captcha': 'human-entered-code'})
+        assert result.status_code == 401
+        assert len(posted) == 1
+        assert posted[0]['LoginForm[captcha]'] == 'human-entered-code'
+        assert posted[0]['LoginForm[qr_code]'] == ''
+        assert not main.sessions['fallback-test'].authenticated
+        assert 'private-password' not in result.text
+
+
+def test_upstream_login_http_error_identifies_stage_but_hides_secrets(monkeypatch):
+    main.rates.clear()
+    async def fake(client, method, path, **kwargs):
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200, text='-2')
+        raise httpx.HTTPStatusError(
+            'Forbidden upstream',
+            request=httpx.Request('POST', erp.ORIGIN+'/login'),
+            response=httpx.Response(403),
+        )
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['error-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/login',
+            hidden={'_csrf': 'fixture-csrf'},
+        )
+        result = c.post('/api/login',
+                        headers={'Authorization': 'Bearer error-test'},
+                        json={'student_id': '123', 'password': 'private-password',
+                              'captcha': 'test-code'})
+        assert result.status_code == 502
+        assert 'HTTP 403 Forbidden' in result.text
+        assert 'official ERP' in result.text
+        assert 'private-password' not in result.text
+        assert not main.sessions['error-test'].authenticated
+
+
+def test_upstream_mfa_and_rate_limit_do_not_submit_password(monkeypatch):
+    main.rates.clear()
+    for response_code, status in [(1, 403), (429, 429)]:
+        post_calls = []
+        async def fake(client, method, path, **kwargs):
+            if 'get-stakeholder-id' in path:
+                if response_code == 1:
+                    return httpx.Response(200, text='1')
+                raise httpx.HTTPStatusError(
+                    'Rate limited',
+                    request=httpx.Request('POST', erp.ORIGIN+'/lookup'),
+                    response=httpx.Response(429),
+                )
+            post_calls.append(path)
+            raise AssertionError('Login submission must be blocked')
+        monkeypatch.setattr(erp, 'request', fake)
+        token = 'blocked-' + str(response_code)
+        with TestClient(main.app) as c:
+            main.sessions[token] = main.Session(
+                httpx.AsyncClient(), action=erp.ORIGIN+'/login',
+                hidden={'_csrf': 'fixture-csrf'},
+            )
+            result = c.post('/api/login',
+                            headers={'Authorization': 'Bearer ' + token},
+                            json={'student_id': '123', 'password': 'private-password',
+                                  'captcha': 'test-code'})
+            assert result.status_code == status
+            assert not post_calls
+            assert not main.sessions[token].authenticated
+
+
+def test_safe_login_failure_classification():
+    captcha = LOGIN.replace(
+        '<img id="loginFormCaptcha-image"',
+        '<div id="field-loginform-captcha" class="has-error">'
+        '<div class="help-block">Some untrusted upstream text 123</div></div>'
+        '<img id="loginFormCaptcha-image"')
+    credentials = LOGIN.replace(
+        '<img id="loginFormCaptcha-image"',
+        '<div id="field-loginform-password" class="has-error"></div>'
+        '<img id="loginFormCaptcha-image"')
+    assert erp.login_failure_reason(captcha) == 'captcha'
+    assert erp.login_failure_reason(credentials) == 'credentials'
+    assert erp.login_failure_reason(LOGIN) == 'unconfirmed'
+    assert erp.login_failure_reason('<h1>Temporary upstream issue</h1>') == 'unconfirmed'
+    assert not erp.authenticated(LOGIN + '<form action="/site/logout"></form>')
+    assert erp.authenticated('<form action="/index.php?r=site%2Flogout"></form>')
+    assert 'untrusted' not in str(erp.login_failure_reason(captcha))
+
+
+@pytest.mark.parametrize('kind,message', [
+    ('captcha', 'ERP rejected the CAPTCHA'),
+    ('password', 'ERP did not accept the sign-in details'),
+])
+def test_server_side_login_field_errors_are_not_echoed(monkeypatch, kind, message):
+    main.rates.clear()
+    details = {
+        'captcha': '<div id="field-loginform-captcha" class="has-error">private error</div>',
+        'password': '<div id="field-loginform-password" class="has-error">private error</div>',
+    }
+    seen_paths = []
+    async def fake(client, method, path, **kwargs):
+        seen_paths.append((method, path))
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200, text='-2')
+        if 'site%2Flogin' in path:
+            return httpx.Response(200, text=LOGIN + details[kind])
+        raise AssertionError('No GET recheck is needed for a recognized login error')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        token='field-error-' + kind
+        main.sessions[token]=main.Session(httpx.AsyncClient(), action=erp.ORIGIN+'/index.php?r=site%2Flogin', hidden={'_csrf': 'fixture'})
+        r=c.post('/api/login', headers={'Authorization':'Bearer '+token},
+                 json={'student_id':'123','password':'secret-password','captcha':'wrong-code'})
+        assert r.status_code == 401
+        assert message in r.text
+        assert 'private error' not in r.text
+        assert 'secret-password' not in r.text
+        assert not main.sessions[token].authenticated
+        assert not any(method=='GET' for method, path in seen_paths)
+
+
+def test_login_intermediate_page_uses_one_safe_get_confirmation(monkeypatch):
+    main.rates.clear()
+    requests = []
+    async def fake(client, method, path, **kwargs):
+        requests.append((method, path))
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200, text='-2')
+        if method == 'POST':
+            return httpx.Response(200, text='<h1>Continuing session</h1>')
+        if method == 'GET' and path == '/':
+            return httpx.Response(200, text='<form action="/site/logout"></form><a href="/attendance">Attendance Register</a>')
+        raise AssertionError('Unexpected request')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['intermediate-test'] = main.Session(httpx.AsyncClient(), action=erp.ORIGIN+'/login',hidden={'_csrf':'fixture'})
+        r=c.post('/api/login',headers={'Authorization':'Bearer intermediate-test'},json={'student_id':'123','password':'sample-password','captcha':'human-code'})
+        assert r.status_code==200
+        assert r.json()['authenticated']
+        assert len([q for q in requests if q[0] == 'POST' and 'get-stakeholder-id' not in q[1]])==1
+        assert len([q for q in requests if q[0] == 'GET'])==1
+
+
+def test_unknown_login_response_never_creates_session(monkeypatch):
+    main.rates.clear()
+    async def fake(client, method, path, **kwargs):
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200,text='-2')
+        return httpx.Response(200,text=LOGIN if method=='GET' else '<h1>Unknown response</h1>')
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        main.sessions['no-evidence'] = main.Session(httpx.AsyncClient(), action=erp.ORIGIN+'/login',hidden={'_csrf':'fixture'})
+        r=c.post('/api/login',headers={'Authorization':'Bearer no-evidence'},json={'student_id':'123','password':'secret-value','captcha':'human-code'})
+        assert r.status_code==401
+        assert 'does not necessarily mean your password is wrong' in r.text
+        assert not main.sessions['no-evidence'].authenticated
+        assert 'secret-value' not in r.text
+
+
+def test_attendance_submitter_is_included_only_when_known_search_action():
+    result = erp.attendance_form(FILTERS_WITH_SEARCH, erp.ORIGIN + '/index.php')
+    assert result['submit'] == {'yt0': 'Search'}
+    assert result['referer'].startswith('https://newerp.kluniversity.in/')
+    assert erp.attendance_form(FILTERS, erp.ORIGIN + '/')['submit'] == {}
+    malicious = FILTERS.replace(
+        '</form>', '<button type="submit" name="danger" value="Delete">Delete</button></form>')
+    assert erp.attendance_form(malicious, erp.ORIGIN + '/')['submit'] == {}
+
+
+def test_missing_results_are_not_misrepresented_as_zero_attendance():
+    with pytest.raises(erp.ERPError, match='returned attendance filters'):
+        erp.parse_attendance(FILTERS)
+    with pytest.raises(erp.ERPError, match='unfamiliar attendance columns'):
+        erp.parse_attendance('<table><tr><th>Student</th><th>Grades</th></tr><tr><td>A</td><td>B</td></tr></table>')
+
+
+def test_gateway_sends_search_button_to_erp(monkeypatch):
+    main.rates.clear()
+    calls = []
+    async def fake(client, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if 'attendance' in path and 'params' not in kwargs:
+            return httpx.Response(200, text=FILTERS_WITH_SEARCH,
+                                  request=httpx.Request('GET', erp.safe_url(path)))
+        if 'attendance' in path and 'params' in kwargs:
+            assert kwargs['params']['yt0'] == 'Search'
+            assert kwargs['params']['Attendance[academicyear]'] == '26'
+            assert kwargs['params']['Attendance[semesterid]'] == '1'
+            assert kwargs['headers']['Referer'].startswith(erp.ORIGIN)
+            return httpx.Response(200, text=TABLE,
+                                  request=httpx.Request('GET', erp.safe_url(path)))
+        raise AssertionError('unexpected mocked route')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as client:
+        main.sessions['search-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/login', authenticated=True,
+            page='<a href="/attendance">Attendance Register</a>',
+        )
+        r=client.get('/api/attendance?year=26&semester=1',
+                     headers={'Authorization':'Bearer search-test'})
+        assert r.status_code == 200, r.text
+        assert r.json()['rows'][0]['attended'] == 18
+        assert len(calls) == 2
+
+
+def test_structure_diagnostic_exposes_no_credentials_or_attendance():
+    private_page = (
+        '<form action="/index.php?r=student%2Fattendance">'
+        '<select name="Attendance[academicyear]"><option>2026-2027</option></select>'
+        '<input name="student" value="private-roll-number">'
+        '<input name="_csrf" value="sensitive-CSRF-secret"></form>'
+        '<script>yiiGridView.init("student-private-data"); $.pjax.reload({});</script>')
+    layout = {'method': 'GET', 'submit': {}}
+    code = erp.attendance_layout_code(private_page, layout)
+    assert code == 'AT-GN-T0-D1-J1-R00-M0-X0'
+    for secret in ('private-roll-number', 'sensitive-CSRF-secret', 'student-private-data', '2026-2027'):
+        assert secret not in code
+    assert erp.attendance_layout_code('<html><table></table></html>',
+                                      {'method':'POST', 'submit':{'yt0':'Search'}}) == 'AT-PY-T1-D0-J0-R00-M0-X0'
+
+
+def test_filter_only_response_returns_safe_layout_code(monkeypatch):
+    main.rates.clear()
+    def response(text):
+        return httpx.Response(200, text=text,
+             request=httpx.Request('GET', erp.ORIGIN + '/attendance'))
+    async def fake(client, method, path, **kwargs):
+        if 'params' in kwargs:
+            return response(
+                FILTERS + '<script>yiiGridView.init("hidden-example")</script>'
+                '<input value="private-id-test">')
+        return response(FILTERS)
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['structure-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/login',
+            authenticated=True, page='<a href="/attendance">Attendance Register</a>')
+        r=c.get('/api/attendance?year=26&semester=1',
+                headers={'Authorization': 'Bearer structure-test'})
+        assert r.status_code == 502
+        assert 'AT-GN-T0-D2-J1' in r.text
+        assert 'hidden-example' not in r.text
+        assert 'private-id-test' not in r.text
+
+
+ATTENDANCE_AJAX_PATH = '/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput'
+ATTENDANCE_AJAX_FORM = (
+    '<form action="' + ATTENDANCE_AJAX_PATH + '" method="post">'
+    '<input type="hidden" name="_csrf" value="test-token">'
+    '<select name="DynamicModel[academicyear]">'
+    '<option value="26">2026-2027</option></select>'
+    '<select name="DynamicModel[semesterid]">'
+    '<option value="1">Odd Sem</option></select>'
+    '<button type="submit">Search</button></form>'
+)
+
+
+def test_known_attendance_route_is_exact_and_same_origin():
+    assert erp.known_attendance_search(erp.ORIGIN + ATTENDANCE_AJAX_PATH)
+    assert not erp.known_attendance_search(erp.ORIGIN + '/index.php?r=other%2Fendpoint')
+    with pytest.raises(erp.ERPError):
+        erp.known_attendance_search('https://other.example/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput')
+
+
+def test_ajax_attendance_search_has_required_fields_and_headers(monkeypatch):
+    main.rates.clear()
+    observed = []
+    async def fake(client, method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        req = httpx.Request(method, erp.safe_url(path))
+        if method == 'GET':
+            return httpx.Response(200, text=ATTENDANCE_AJAX_FORM, request=req)
+        assert method == 'POST'
+        assert erp.known_attendance_search(path)
+        assert kwargs['data']['DynamicModel[academicyear]'] == '26'
+        assert kwargs['data']['DynamicModel[semesterid]'] == '1'
+        assert kwargs['data']['DynamicModel[semester]'] == '1'
+        assert kwargs['data']['_csrf'] == 'test-token'
+        assert kwargs['headers']['X-Requested-With'] == 'XMLHttpRequest'
+        assert kwargs['headers']['Origin'] == erp.ORIGIN
+        assert kwargs['headers']['Referer'].startswith(erp.ORIGIN)
+        return httpx.Response(200, text=TABLE, request=req)
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as client:
+        main.sessions['ajax-search-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN + '/login',
+            authenticated=True,
+            page='<a href="' + ATTENDANCE_AJAX_PATH + '">Attendance Register</a>',
+        )
+        r = client.get('/api/attendance?year=26&semester=1',
+                       headers={'Authorization': 'Bearer ajax-search-test'})
+        assert r.status_code == 200, r.text
+        assert r.json()['rows'][0]['attended'] == 18
+        assert [m for m, _, _ in observed] == ['GET', 'POST']
+
+
+def test_unrelated_form_never_uses_attendance_ajax_header(monkeypatch):
+    main.rates.clear()
+    observed = []
+    async def fake(client, method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        req = httpx.Request(method, erp.safe_url(path))
+        if method == 'GET':
+            return httpx.Response(200, text=FILTERS, request=req)
+        raise AssertionError('Only a GET form submission is expected')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as client:
+        main.sessions['non-ajax-form-test'] = main.Session(
+            httpx.AsyncClient(), authenticated=True,
+            page='<a href="/index.php?r=student%2Fattendance">Attendance Register</a>')
+        r = client.get('/api/attendance?year=26&semester=1',
+                       headers={'Authorization': 'Bearer non-ajax-form-test'})
+        assert r.status_code == 502
+        assert 'X-Requested-With' not in observed[-1][2].get('headers', {})
+
+
+def test_course_level_attendance_without_ltps_is_preserved_not_invented():
+    html = ('<table><thead><tr><th>Course Code</th><th>Course Title</th>'
+            '<th>Conducted Hours</th><th>Attended Hours</th></tr></thead>'
+            '<tbody><tr><td>CS101</td><td>Algorithms</td><td>20</td><td>15</td>'
+            '</tr></tbody></table>')
+    rows = erp.parse_attendance(html)
+    assert rows == [{'code': 'CS101', 'name': 'Algorithms',
+                     'component': 'Unspecified', 'conducted': 20,
+                     'attended': 15, 'percentage': 75.0}]
+
+
+def test_safe_ajax_html_fragment_wrapper_and_existing_ltps():
+    fragment = TABLE
+    import json
+    for obj in ({'html': fragment}, {'data': fragment}):
+        data = erp.parse_attendance(json.dumps(obj))
+        assert len(data) == 2
+        assert data[0]['component'] == 'L'
+    with pytest.raises(erp.ERPError):
+        erp.parse_attendance(json.dumps({'data': [{'attended': 15, 'total': 20}]}))
+
+
+def test_dynamic_attendance_form_with_different_post_action():
+    """Same-origin action may differ from the page that renders the form."""
+    html = ATTENDANCE_AJAX_FORM.replace(
+        'action="' + ATTENDANCE_AJAX_PATH + '"',
+        'action="/index.php?r=studentattendance%2Fstudentdailyattendance%2Findex"')
+    f = erp.attendance_form(html, erp.ORIGIN + ATTENDANCE_AJAX_PATH)
+    assert f['method'] == 'POST'
+    assert not erp.known_attendance_search(f['url'])
+    assert erp.known_attendance_search(f['referer'])
+    assert erp.attendance_ajax_form(f)
+    assert erp.attendance_layout_code(html, f).endswith('-R01-M1-X1')
+
+
+def test_unverified_dynamic_form_stays_non_ajax():
+    html = ATTENDANCE_AJAX_FORM.replace(
+        'action="' + ATTENDANCE_AJAX_PATH + '"', 'action="/index.php?r=unrelated%2Fpath"')
+    f = erp.attendance_form(html, erp.ORIGIN + '/index.php?r=unrelated%2Fpage')
+    assert not erp.attendance_ajax_form(f)
+    assert erp.attendance_layout_code(html, f).endswith('-R00-M1-X0')
+
+
+def test_same_origin_dynamic_form_posts_extra_semester_and_xhr(monkeypatch):
+    main.rates.clear()
+    html = ATTENDANCE_AJAX_FORM.replace(
+        'action="' + ATTENDANCE_AJAX_PATH + '"',
+        'action="/index.php?r=studentattendance%2Fstudentdailyattendance%2Findex"')
+    observed = []
+    async def fake(client, method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        if method == 'GET':
+            return httpx.Response(200, text=html,
+                   request=httpx.Request('GET', erp.ORIGIN + ATTENDANCE_AJAX_PATH))
+        assert kwargs['data']['DynamicModel[semester]'] == '1'
+        assert kwargs['headers']['X-Requested-With'] == 'XMLHttpRequest'
+        return httpx.Response(200, text=TABLE,
+                   request=httpx.Request('POST', erp.safe_url(path)))
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['split-action-test'] = main.Session(
+            httpx.AsyncClient(), authenticated=True,
+            page='<a href="' + ATTENDANCE_AJAX_PATH + '">Attendance Register</a>')
+        r = c.get('/api/attendance?year=26&semester=1',
+             headers={'Authorization':'Bearer split-action-test'})
+        assert r.status_code == 200, r.text
+        assert r.json()['rows'][0]['conducted'] == 20
+        assert len(observed) == 2
+
+
+def test_upstream_redirect_metadata_detects_post_changed_to_get():
+    async def run():
+        calls=[]
+        def handler(req):
+            calls.append((req.method, str(req.url)))
+            if len(calls) == 1:
+                return httpx.Response(302, headers={'location': '/attendance-home'})
+            return httpx.Response(200, text='<html></html>',
+                                  headers={'content-type': 'text/html'})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            r=await erp.request(client,'POST','/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput',
+                                data={'DynamicModel[academicyear]':'26'})
+            assert [method for method,_ in calls] == ['POST','GET']
+            assert r.extensions['erp_redirects'] == 1
+            assert r.extensions['erp_post_to_get'] is True
+    asyncio.run(run())
+
+
+def test_safe_attendance_response_code_no_values_or_secrets():
+    html = ('<form><select name="DynamicModel[academicyear]">'
+            '<option selected value="26">sensitive ID</option></select>'
+            '<select name="DynamicModel[semesterid]">'
+            '<option selected value="1">Odd</option></select>'
+            '<div class="has-error">private password</div>'
+            '<input name="_csrf" value="SECRET"></form>')
+    response=httpx.Response(
+        200, text=html, headers={'content-type':'text/html; charset=utf-8'})
+    response.extensions.update({'erp_redirects':1,'erp_post_to_get':True})
+    form={'year_name':'DynamicModel[academicyear]',
+          'semester_name':'DynamicModel[semesterid]'}
+    code=erp.attendance_response_code(response,form,'26','1')
+    assert code == 'QH11-SYY-Z11'
+    assert all(v not in code for v in
+               ['SECRET','private password','sensitive ID','DynamicModel','26'])
+    response2=httpx.Response(200,text='<html></html>',
+                             headers={'content-type':'application/json'})
+    assert erp.attendance_response_code(response2,form,'26','1') == 'QJ00-S??-Z00'
+
+
+def test_readonly_module_parsing_preserves_data_and_strips_unsafe_markup():
+    from backend import modules
+    html = (
+        '<form><table><thead><tr><th>Course</th><th>Grade</th></tr></thead>'
+        '<tbody><tr><td>Maths</td><td>A</td></tr></tbody></table></form>'
+        '<script>window.secret="do-not-return";</script>')
+    parsed = modules.parse_readonly_page(html)
+    assert parsed == [{'columns': ['Course', 'Grade'], 'rows': [['Maths','A']]}]
+    assert 'do-not-return' not in str(parsed)
+    assert all('newerp.kluniversity.in' in erp.safe_url(route)
+               for _,route in modules.MODULES.values())
+
+
+def test_readonly_module_hidden_input_and_security_fields_are_excluded():
+    from backend import modules
+    html=('<table><tr><td>Password</td><td>12345</td></tr>'
+          '<tr><td>Class</td><td>CSE</td></tr></table>'
+          '<input type="hidden" name="_csrf" value="sensitive-secret">')
+    parsed=modules.parse_readonly_page(html)
+    assert parsed[0]['rows'] == [['Class','CSE']]
+    assert 'sensitive-secret' not in str(parsed)
+    assert '12345' not in str(parsed)
+    with pytest.raises(erp.ERPError, match='data layout'):
+        modules.parse_readonly_page('<html><h1>No tables</h1></html>')
+
+
+def test_readonly_module_requires_session_and_rejects_unknown_routes(monkeypatch):
+    from backend import modules
+    main.rates.clear()
+    reqs=[]
+    async def fake(client, method, path, **kwargs):
+        reqs.append((method,path))
+        return httpx.Response(
+            200,
+            text='<table><thead><tr><th>Subject</th><th>Value</th></tr></thead>'
+                 '<tbody><tr><td>Mathematics</td><td>7.3</td></tr></tbody></table>')
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        assert c.get('/api/modules/profile').status_code==401
+        main.sessions['modules-test']=main.Session(httpx.AsyncClient(), authenticated=True)
+        auth={'Authorization':'Bearer modules-test'}
+        assert c.get('/api/modules/arbitrary',headers=auth).status_code==404
+        assert not reqs
+        for module in modules.MODULES:
+            r=c.get('/api/modules/'+module,headers=auth)
+            assert r.status_code==200, r.text
+            assert r.json()['tables'][0]['rows'][0] == ['Mathematics','7.3']
+        assert len(reqs)==4
+        assert all(method=='GET' for method,_ in reqs)
+        assert [p for _,p in reqs] == [v[1] for v in modules.MODULES.values()]
+
+
+def test_readonly_module_signin_failure_cannot_expose_fields(monkeypatch):
+    main.rates.clear()
+    async def fake(client, method, path, **kwargs):
+        return httpx.Response(200,text=LOGIN)
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        main.sessions['modules-expired']=main.Session(httpx.AsyncClient(), authenticated=True)
+        r=c.get('/api/modules/cgpa',headers={'Authorization':'Bearer modules-expired'})
+        assert r.status_code==401
+        assert not main.sessions['modules-expired'].authenticated
+        assert 'LoginForm[password]' not in r.text

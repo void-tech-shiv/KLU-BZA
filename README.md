@@ -11,6 +11,56 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 - Responsive layout, explicit fictional demo, empty/error/loading states, sign-out and last successful sync time. Data remains visible during a failed refresh, but is cleared on logout or filter change.
 - Backend tests and CI that builds a web bundle and a **debug APK**.
 
+## Login connection troubleshooting
+
+The gateway now distinguishes structured Yii validation errors (CAPTCHA vs
+sign-in fields) without forwarding upstream error text, student identity,
+passwords, or HTML to the app. An intermediate POST page is verified once by
+visiting the ERP landing page using the existing session cookie jar. A redirect
+by itself never counts as successful authentication; only explicit sign-out
+controls with no login form do. No failed password request is retried.
+If ERP returns an unrecognized layout, the gateway says it could not confirm
+the session rather than claiming the password was incorrect.
+
+
+A valid CAPTCHA on screen confirms the earlier challenge request worked, but a
+subsequent account-check or sign-in POST can still be rejected by ERP. The optional
+AJAX stakeholder lookup is used to identify accounts requiring MFA. If it returns
+a temporary 404/405/5xx error or a network failure, the gateway attempts the
+**normal official login form** once with the human-entered CAPTCHA and credentials.
+The ERP server still controls authentication; positive MFA indications,
+rate limits and unexpected account-check responses remain blocked. The login
+POST sends the public form's empty `LoginForm[qr_code]` field alongside
+ordinary browser `Origin` and `Referer` headers; it still requires a fresh
+human-entered CAPTCHA. HTTP 403 may indicate ERP-side security policy, which
+cannot and should not be bypassed from cloud hosting.
+An ERP login HTTP error now names the failing stage and HTTP status without
+including account details. Never paste student credentials into GitHub issues
+or screenshots.
+
+## Safe attendance diagnostics
+
+If the official ERP returns only the filter UI after the year/semester search,
+the API includes an `AT-..` layout code in its error. The code exposes only:
+form method G/P, whether a recognized named Search submit control exists,
+clamped counts of result tables and dropdowns, and a boolean marker that
+common AJAX/PJAX JavaScript is present. It contains no raw response HTML,
+page URLs, student IDs, credentials, cookies, hidden CSRF values, course
+details, or JavaScript source. Students may share this code to help distinguish
+a conventional form from an AJAX-driven flow. It does **not** automatically
+guess unknown private ERP endpoints or fabricate course attendance.
+
+The `Q` suffix adds strictly structural POST response signals: content type
+(H HTML, J JSON, O other), presence of standard field-validation markup,
+bounded form count, whether the server still marks selected year/semester,
+and the number/type of upstream redirects. It never includes response HTML,
+field values, query strings, account details or token data. `Z11`, for
+example, means there was one redirect and the ERP converted POST to GET.
+These diagnostic codes are not proof of failed credentials.
+
+When no attendance has synced, dashboard component counts display em dashes,
+not misleading zeros. The selected planning target remains configurable.
+
 ## Verification boundary
 
 **This is an integration preview, not a verified production student service.** Public login markup was inspected on 24 October 2026. No real student credentials were used. Login success, authenticated menu discovery, actual attendance form names/options, pagination, and session expiry still require an account-owner test. The attendance adapter infers forms from semantic field names and table headings; it fails with a visible error rather than fabricating results. Screenshots alone do not establish the authenticated HTML contract.
@@ -31,6 +81,57 @@ GitHub Actions uses this public API URL by default when the repository Actions v
 The gateway is an **unofficial student integration preview**. Do not submit university credentials until the service owner has personally checked the upstream login/CAPTCHA flow, hosting/log retention, and KL University's integration rules. Never submit passwords in GitHub issues or chat. No account passwords or CAPTCHA responses are stored by the app; the gateway handles credentials transiently while proxying to ERP.
 
 Render's Free services can spin down after 15 minutes of inactivity; a cold start may take around a minute. Because session cookies are in the backend's process memory, any spin-down/redeploy requires the student to obtain a new CAPTCHA and sign in again. Do not treat this free test gateway as a highly available production service. The free plan has monthly resource limits.
+
+## Read-only module preview
+
+KLU BZA now recognizes the fixed university ERP paths for **Overall CGPA**,
+**Timetable**, **Exam Seating**, and **Student Profile**. The gateway provides
+`GET /api/modules/{cgpa|timetable|seating|profile}` behind the existing
+authenticated, rate-limited per-user session. Requests use exactly the
+hardcoded same-origin URLs and do **not** allow URL parameters or arbitrary
+proxies. Only bounded tables or description-list text are returned to the
+student: no raw HTML, JavaScript, login fields, CSRF or session values.
+The server does not persist module data. An unknown page layout returns a
+clear unsupported-layout error rather than imaginary grades or seating.
+
+The Flutter app provides these module buttons, renders read-only text tables
+when available and offers explicit **Open official ERP** links. The browser
+may require a separate ERP login; backend session cookies are never copied
+to the browser. The attendance button can open the official page when the
+scraped results have not yet been recognized.
+
+**Live integration status:** The account owner has verified sign-in and
+academic-year/semester selection but the attendance POST still returns a filter
+page rather than a result table, most recently
+`AT-PN-T0-D2-J1-R11-M1-X1-QH03-S??-Z00`. It is an HTML response with no
+redirect or visible validation markers. Real CGPA, timetable, exam seating
+and profile parsing also remain to be verified against the current ERP
+markup with the account owner's help. Do not call green mock-based tests
+evidence of a successful production data sync.
+
+## Android phone: import from the official ERP, on device
+
+If automatic attendance sync returns only filters, use **Import from official ERP
+(on-device)** from the KLU BZA dashboard (Android APK). The built-in browser
+opens `newerp.kluniversity.in` **directly**, not through the Render gateway.
+You will need to sign in to the college site inside that browser, then open
+Attendance Register, select the same academic year and semester shown in KLU
+BZA, and press **Search**. Once course attendance rows are visible, tap
+**Import visible attendance**.
+
+The app reads only course code, course description, L/P/S component,
+conducted/attended hours, academic year and semester from the displayed
+attendance table. Counts and chosen year/semester are validated before the
+rows appear in the dashboard. Reading is initiated only on the user's tap.
+No credential fields, browser cookies, CSRF tokens, CAPTCHA, raw HTML or
+attendance records are sent to KLU BZA's backend. Imported rows remain
+in memory until logout, filter change or app exit, with an explicit
+**Imported locally** label. Auto-sync remains a separate, unverified feature.
+
+This uses the official website's real authentication and Search workflow;
+it does not bypass university sign-in/CAPTCHA. It is an alternative when
+the cloud scraper fails. Flutter web users get an official-browser link
+instead of the Android-only embedded importer.
 
 ## Run locally
 

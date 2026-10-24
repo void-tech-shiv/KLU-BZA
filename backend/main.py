@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, SecretStr
 import httpx
-from . import erp
+from . import erp, modules
 
 TTL = 20 * 60
 sessions = {}
@@ -126,20 +126,90 @@ async def login(data: Login, session: Session = Depends(get_session)):
     async with session.lock:
         if session.authenticated:
             raise HTTPException(409, 'Already signed in.')
-        check = await erp.request(session.client, 'POST', '/index.php?r=site%2Fget-stakeholder-id',
-                                  data={**session.hidden, 'username': data.student_id})
-        if check.text.strip() == '1':
-            raise HTTPException(403, 'This account requires MFA. Please use the official ERP.')
-        if check.text.strip() not in ('-2', '-1', '-3'):
-            raise erp.ERPError('ERP could not verify the student login. Retry later.')
-        r = await erp.request(session.client, 'POST', session.action,
-              data={**session.hidden, 'LoginForm[username]': data.student_id,
-                    'LoginForm[password]': data.password.get_secret_value(),
-                    'LoginForm[captcha]': data.captcha, 'login-button': ''})
-        if not erp.authenticated(r.text):
-            raise HTTPException(401, 'Login unsuccessful. Check your details and load a new CAPTCHA.')
+        # Stakeholder lookup controls the optional MFA UI on the public ERP form.
+        # A missing/unavailable lookup must not prevent a NORMAL form submission:
+        # ERP itself still validates password, CAPTCHA and any required MFA.
+        # A positive MFA response, rate limit, or unexpected response fails closed.
+        try:
+            check = await erp.request(
+                session.client, 'POST', '/index.php?r=site%2Fget-stakeholder-id',
+                data={**session.hidden, 'username': data.student_id},
+                headers={'X-Requested-With': 'XMLHttpRequest', 'Referer': erp.ORIGIN + '/'},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (404, 405, 500, 502, 503, 504):
+                if exc.response.status_code == 429:
+                    raise HTTPException(429, 'ERP temporarily rate-limited login. Retry later.')
+                raise HTTPException(502,
+                    f'ERP account check returned HTTP {exc.response.status_code}; use the official ERP.')
+        except httpx.TransportError:
+            # The optional AJAX lookup is unreachable; attempt the official login
+            # form exactly once. Never retry a password POST automatically.
+            pass
+        else:
+            if check.text.strip() == '1':
+                raise HTTPException(403, 'This account requires MFA. Please use the official ERP.')
+            if check.text.strip() not in ('-2', '-1', '-3'):
+                raise erp.ERPError('ERP account check returned an unexpected response. Use the official ERP.')
+        try:
+            r = await erp.request(
+                session.client, 'POST', session.action,
+                data={**session.hidden,
+                      'LoginForm[username]': data.student_id,
+                      'LoginForm[password]': data.password.get_secret_value(),
+                      'LoginForm[captcha]': data.captcha,
+                      # Present even when empty in the university's public HTML form.
+                      'LoginForm[qr_code]': '',
+                      'login-button': ''},
+                headers={
+                    # Match ordinary browser form semantics for origin/CSRF checks.
+                    # Never skip the ERP's own CAPTCHA or access restrictions.
+                    'Origin': erp.ORIGIN,
+                    'Referer': erp.ORIGIN + '/',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                },
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                raise HTTPException(
+                    502, 'ERP rejected the login request (HTTP 403 Forbidden). '
+                         'This may be a session/CSRF issue or a university-side access restriction. '
+                         'Use the official ERP in your browser rather than repeatedly retrying.')
+            raise HTTPException(
+                502, f'ERP login returned HTTP {exc.response.status_code}. '
+                     'Use the official ERP if the problem persists.')
+        except httpx.TransportError:
+            raise HTTPException(
+                502, 'ERP login connection timed out or failed. '
+                     'Try again later with a new CAPTCHA.')
+
+        # A successful POST can return an intermediate page without a logout
+        # link. Verify the normal landing page ONCE using the same cookie jar;
+        # never repeat the password POST and never assume a 302 is a success.
+        landing = r.text
+        if not erp.authenticated(landing):
+            reason = erp.login_failure_reason(landing)
+            if reason == 'captcha':
+                raise HTTPException(
+                    401, 'ERP rejected the CAPTCHA. Tap New CAPTCHA and enter the new code.')
+            if reason == 'credentials':
+                raise HTTPException(
+                    401, 'ERP did not accept the sign-in details. Check your account '
+                         'on the official ERP website.')
+            try:
+                home = await erp.request(session.client, 'GET', '/')
+            except (httpx.HTTPError, erp.ERPError):
+                home = None
+            if home is not None and erp.authenticated(home.text):
+                landing = home.text
+
+        if not erp.authenticated(landing):
+            raise HTTPException(
+                401, 'ERP did not confirm a signed-in session. '
+                     'This does not necessarily mean your password is wrong. '
+                     'Check the official ERP website.')
         session.authenticated = True
-        session.page = r.text
+        session.page = landing
         return {'authenticated': True}
 
 async def filters(session):
@@ -164,15 +234,59 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
         f = await filters(session)
         if year not in [x['value'] for x in f['years']] or semester not in [x['value'] for x in f['semesters']]:
             raise HTTPException(400, 'Select an available academic year and semester.')
-        payload = {**f['hidden'], f['year_name']: year, f['semester_name']: semester}
-        if f['method'] not in ('GET','POST'):
+        payload = {**f['hidden'], f['year_name']: year, f['semester_name']: semester,
+                   **f['submit']}
+        if f['method'] not in ('GET', 'POST'):
             raise erp.ERPError('Unexpected attendance form method.')
-        r = await erp.request(session.client, f['method'], f['url'],
-                              **({'params': payload} if f['method'] == 'GET' else {'data': payload}))
+        headers = {'Referer': f['referer']}
+        # The attendance search route responds to a Yii-style AJAX form
+        # submission. Other ERP forms retain their documented GET/POST flow.
+        if erp.attendance_ajax_form(f):
+            payload['DynamicModel[semester]'] = semester
+            headers.update({
+                'Origin': erp.ORIGIN,
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'text/html, */*;q=0.8',
+            })
+        r = await erp.request(
+            session.client, f['method'], f['url'], headers=headers,
+            **({'params': payload} if f['method'] == 'GET' else {'data': payload}))
         if erp.soup(r.text).select_one('form#login-form'):
             session.authenticated = False
             raise HTTPException(401, 'ERP session expired. Please sign in again.')
-        return {'rows': erp.parse_attendance(r.text), 'synced_at': datetime.now(timezone.utc).isoformat()}
+        try:
+            rows = erp.parse_attendance(r.text)
+        except erp.ERPError as exc:
+            # For filter-only responses, add a fixed-category diagnostic; do
+            # not return ERP HTML, user input, URLs, or login information.
+            if str(exc).startswith('ERP returned attendance filters but no readable course table'):
+                code = erp.attendance_layout_code(r.text, f)
+                response_code = erp.attendance_response_code(r, f, year, semester)
+                raise erp.ERPError(
+                    'ERP returned filters without attendance rows. '
+                    f'Diagnostic {code}-{response_code}. '
+                    'Please share only this code, not your ERP password or page source.'
+                ) from None
+            raise
+        return {'rows': rows, 'synced_at': datetime.now(timezone.utc).isoformat()}
+
+@app.get('/api/modules/{name}')
+async def read_module(name: str, session: Session = Depends(get_session)):
+    """Expose only bounded text data from four exact, read-only ERP routes."""
+    if name not in modules.MODULES:
+        raise HTTPException(404, 'Unknown ERP module.')
+    async with session.lock:
+        if not session.authenticated:
+            raise HTTPException(401, 'Please sign in first.')
+        title, path = modules.MODULES[name]
+        response = await erp.request(session.client, 'GET', path)
+        if erp.has_login_form(response.text):
+            session.authenticated = False
+            raise HTTPException(401, 'ERP session expired. Please sign in again.')
+        tables = modules.parse_readonly_page(response.text)
+        return {'module': name, 'title': title, 'tables': tables,
+                'synced_at': datetime.now(timezone.utc).isoformat()}
+
 
 @app.delete('/api/session')
 async def logout(request: Request):
