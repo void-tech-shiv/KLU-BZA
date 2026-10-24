@@ -27,8 +27,11 @@ def parse_readonly_page(html):
     document = erp.soup(html)
     if erp.has_login_form(html):
         raise erp.ERPError('ERP sign-in session expired. Please sign in again.')
-    for el in document.select('script,style,noscript,template,form,input,textarea'):
+    for el in document.select('script,style,noscript,template,input,textarea'):
         el.decompose()
+    # Keep read-only tables nested inside a form but remove the form boundary.
+    for el in document.select('form'):
+        el.unwrap()
     tables = []
     for table in document.select('table'):
         if len(tables) >= 5:
