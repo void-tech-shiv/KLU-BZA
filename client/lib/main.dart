@@ -2,10 +2,19 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'attendance.dart';
 
 const apiBase = String.fromEnvironment('API_BASE_URL');
+const officialErp = 'https://newerp.kluniversity.in';
+const erpRoutes = <String, String>{
+  'attendance': '/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput',
+  'profile': '/index.php?r=studentinfo%2Fstudentprofileinfo%2Fviewprofileindi',
+  'cgpa': '/index.php?r=studentinfo%2Fstudentendexamresult%2Fsearchgetmycgpa',
+  'timetable': '/index.php?r=timetables%2Funiversitymasteracademictimetableview%2Findexstudentindisearch',
+  'seating': '/index.php?r=examsection%2Fexam-invigilator-student-room-allotment-info%2Fstud_my_seating_plan',
+};
 void main() => runApp(const KluApp());
 
 class KluApp extends StatelessWidget {
@@ -46,6 +55,8 @@ class _HomeState extends State<Home> {
   int target = 75;
   List<Map<String, dynamic>> years = [], semesters = [];
   List<Attendance> rows = [];
+  String? selectedModule, moduleTitle;
+  List<Map<String, dynamic>> moduleTables = [];
   @override
   void initState() {
     super.initState();
@@ -236,11 +247,36 @@ class _HomeState extends State<Home> {
     });
   }
 
+  Future<void> loadModule(String module) async {
+    if (demo) throw Exception('Real ERP modules are unavailable in demo mode.');
+    if (!erpRoutes.containsKey(module) || module == 'attendance') {
+      throw Exception('Unknown ERP module.');
+    }
+    final data = await api('/api/modules/$module');
+    if (!mounted) return;
+    setState(() {
+      selectedModule = module;
+      moduleTitle = data['title'] as String? ?? module;
+      moduleTables = (data['tables'] as List).cast<Map<String, dynamic>>();
+    });
+  }
+
+  Future<void> openOfficial(String name) async {
+    final path = erpRoutes[name];
+    if (path == null) throw Exception('Unknown ERP module.');
+    final uri = Uri.parse('$officialErp$path');
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched) throw Exception('Could not open official ERP in your browser.');
+  }
+
   void openDemo() {
     if (pageScroll.hasClients) pageScroll.jumpTo(0);
     password.clear();
     captcha.clear();
     setState(() {
+      selectedModule = null;
+      moduleTitle = null;
+      moduleTables = [];
       demo = true;
       loggedIn = true;
       error = null;
@@ -273,6 +309,9 @@ class _HomeState extends State<Home> {
         token = null;
         loggedIn = false;
         demo = false;
+        selectedModule = null;
+        moduleTitle = null;
+        moduleTables = [];
         rows = [];
         years = [];
         semesters = [];
@@ -586,6 +625,12 @@ class _HomeState extends State<Home> {
                   years.isEmpty ? 'Load filters' : 'Refresh attendance',
                 ),
               ),
+              if (!demo)
+                OutlinedButton.icon(
+                  onPressed: busy ? null : () => run(() => openOfficial('attendance')),
+                  icon: const Icon(Icons.open_in_new),
+                  label: const Text('Official attendance page'),
+                ),
             ],
           ),
         ),
@@ -641,6 +686,87 @@ class _HomeState extends State<Home> {
           );
         },
       ),
+      if (!demo) ...erpTools(),
+    ];
+  }
+
+  List<Widget> erpTools() {
+    const entries = <(String, String, IconData)>[
+      ('profile', 'Profile', Icons.person_outline),
+      ('cgpa', 'Overall CGPA', Icons.school_outlined),
+      ('timetable', 'Timetable', Icons.calendar_month_outlined),
+      ('seating', 'Exam seating', Icons.meeting_room_outlined),
+    ];
+    return [
+      const SizedBox(height: 24),
+      const Text('More ERP tools',
+          style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 6),
+      const Text('Read-only preview. Some university pages may need additional '
+          'integration to show their records here.',
+          style: TextStyle(color: Colors.blueGrey)),
+      const SizedBox(height: 14),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final item in entries)
+            OutlinedButton.icon(
+              onPressed: busy ? null : () => run(() => loadModule(item.$1)),
+              icon: Icon(item.$3),
+              label: Text(item.$2),
+            ),
+        ],
+      ),
+      if (selectedModule != null) ...[
+        const SizedBox(height: 16),
+        Card(
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(moduleTitle ?? selectedModule!,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
+                const SizedBox(height: 8),
+                for (final table in moduleTables) ...[
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      columns: (table['columns'] as List<dynamic>)
+                          .map((x) => DataColumn(label: Text('$x')))
+                          .toList(),
+                      rows: (table['rows'] as List<dynamic>)
+                          .map((record) => DataRow(
+                                cells: (record as List<dynamic>)
+                                    .map((value) => DataCell(
+                                          ConstrainedBox(
+                                            constraints: const BoxConstraints(maxWidth: 220),
+                                            child: Text('$value'),
+                                          ),
+                                        ))
+                                    .toList(),
+                              ))
+                          .toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+      if (selectedModule != null)
+        TextButton.icon(
+          onPressed: busy ? null : () => run(() => openOfficial(selectedModule!)),
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('Open this module on official ERP'),
+        ),
+      const SizedBox(height: 8),
+      const Text('Official ERP opens separately in your browser and may ask you to sign in again.',
+          style: TextStyle(color: Colors.blueGrey, fontSize: 12)),
     ];
   }
 
