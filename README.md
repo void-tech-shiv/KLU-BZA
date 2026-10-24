@@ -5,7 +5,8 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 ## What is implemented
 
 - Student ID, password and human-entered ERP CAPTCHA; no MFA field. Accounts for which ERP requires MFA are directed to the official ERP.
-- Fresh per-user HTTP cookie jars, CSRF forwarding, CAPTCHA fetch, student MFA lookup and login submission based on the observed public ERP form.
+- Fresh per-user HTTP cookie jars, CSRF forwarding, CAPTCHA fetch (automatically on launch with a configured gateway), student MFA lookup and login submission based on the observed public ERP form.
+- CAPTCHA refresh survives an expired prior session; invalid upstream CAPTCHA responses are rejected rather than displayed as broken images.
 - Semantic attendance parser, academic-year and semester filters, separate L/P/S component cards, selectable attendance target and catch-up/miss calculations.
 - Responsive layout, explicit fictional demo, empty/error/loading states, sign-out and last successful sync time. Data remains visible during a failed refresh, but is cleared on logout or filter change.
 - Backend tests and CI that builds a web bundle and a **debug APK**.
@@ -48,7 +49,7 @@ flutter run --dart-define=API_BASE_URL=https://YOUR-GATEWAY-HOST
 flutter build apk --debug --dart-define=API_BASE_URL=https://YOUR-GATEWAY-HOST
 ```
 
-Without `API_BASE_URL`, both builds offer a clearly labelled demo, and live sign-in is disabled. Android localhost refers to the phone, not your laptop. No paid hosting resource is provisioned by this repository.
+Without `API_BASE_URL`, both builds offer a clearly labelled demo, and live sign-in is disabled. If a live build shows no CAPTCHA, first confirm that the login form is visible and the build used the correct `API_BASE_URL`. The client automatically requests the CAPTCHA on opening the login screen and also provides **New CAPTCHA** for a manual retry. A gateway/API error is shown above the login form; do not try to work around ERP CAPTCHA or MFA. Android localhost refers to the phone, not your laptop. No paid hosting resource is provisioned by this repository.
 
 ## GitHub builds
 
