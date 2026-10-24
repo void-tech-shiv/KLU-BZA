@@ -109,6 +109,30 @@ and profile parsing also remain to be verified against the current ERP
 markup with the account owner's help. Do not call green mock-based tests
 evidence of a successful production data sync.
 
+## Android phone: import from the official ERP, on device
+
+If automatic attendance sync returns only filters, use **Import from official ERP
+(on-device)** from the KLU BZA dashboard (Android APK). The built-in browser
+opens `newerp.kluniversity.in` **directly**, not through the Render gateway.
+You will need to sign in to the college site inside that browser, then open
+Attendance Register, select the same academic year and semester shown in KLU
+BZA, and press **Search**. Once course attendance rows are visible, tap
+**Import visible attendance**.
+
+The app reads only course code, course description, L/P/S component,
+conducted/attended hours, academic year and semester from the displayed
+attendance table. Counts and chosen year/semester are validated before the
+rows appear in the dashboard. Reading is initiated only on the user's tap.
+No credential fields, browser cookies, CSRF tokens, CAPTCHA, raw HTML or
+attendance records are sent to KLU BZA's backend. Imported rows remain
+in memory until logout, filter change or app exit, with an explicit
+**Imported locally** label. Auto-sync remains a separate, unverified feature.
+
+This uses the official website's real authentication and Search workflow;
+it does not bypass university sign-in/CAPTCHA. It is an alternative when
+the cloud scraper fails. Flutter web users get an official-browser link
+instead of the Android-only embedded importer.
+
 ## Run locally
 
 Requirements: Python 3.12+, Flutter stable SDK, and Android Studio/Android SDK for APKs. Run `flutter doctor` and resolve Android toolchain requirements first. Java 17 is used by CI.
