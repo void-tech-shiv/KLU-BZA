@@ -13,6 +13,16 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 
 ## Login connection troubleshooting
 
+The gateway now distinguishes structured Yii validation errors (CAPTCHA vs
+sign-in fields) without forwarding upstream error text, student identity,
+passwords, or HTML to the app. An intermediate POST page is verified once by
+visiting the ERP landing page using the existing session cookie jar. A redirect
+by itself never counts as successful authentication; only explicit sign-out
+controls with no login form do. No failed password request is retried.
+If ERP returns an unrecognized layout, the gateway says it could not confirm
+the session rather than claiming the password was incorrect.
+
+
 A valid CAPTCHA on screen confirms the earlier challenge request worked, but a
 subsequent account-check or sign-in POST can still be rejected by ERP. The optional
 AJAX stakeholder lookup is used to identify accounts requiring MFA. If it returns
