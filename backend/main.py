@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, SecretStr
 import httpx
-from . import erp
+from . import erp, modules
 
 TTL = 20 * 60
 sessions = {}
@@ -269,6 +269,24 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
                 ) from None
             raise
         return {'rows': rows, 'synced_at': datetime.now(timezone.utc).isoformat()}
+
+@app.get('/api/modules/{name}')
+async def read_module(name: str, session: Session = Depends(get_session)):
+    """Expose only bounded text data from four exact, read-only ERP routes."""
+    if name not in modules.MODULES:
+        raise HTTPException(404, 'Unknown ERP module.')
+    async with session.lock:
+        if not session.authenticated:
+            raise HTTPException(401, 'Please sign in first.')
+        title, path = modules.MODULES[name]
+        response = await erp.request(session.client, 'GET', path)
+        if erp.has_login_form(response.text):
+            session.authenticated = False
+            raise HTTPException(401, 'ERP session expired. Please sign in again.')
+        tables = modules.parse_readonly_page(response.text)
+        return {'module': name, 'title': title, 'tables': tables,
+                'synced_at': datetime.now(timezone.utc).isoformat()}
+
 
 @app.delete('/api/session')
 async def logout(request: Request):
