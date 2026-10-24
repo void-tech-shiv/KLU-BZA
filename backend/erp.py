@@ -138,6 +138,19 @@ def known_attendance_search(url):
             and route == ['studentattendance/studentdailyattendance/searchgetinput'])
 
 
+def attendance_ajax_form(form):
+    """A recognized student attendance form may POST to a different action.
+
+    Only trust the exact DynamicModel fields AND a verified attendance search
+    page or form action. The upstream action itself remains same-origin checked.
+    """
+    return (form.get('method') == 'POST'
+            and form.get('year_name') == 'DynamicModel[academicyear]'
+            and form.get('semester_name') == 'DynamicModel[semesterid]'
+            and (known_attendance_search(form['url'])
+                 or known_attendance_search(form['referer'])))
+
+
 def attendance_form(html, page_url):
     s = soup(html)
     for f in s.find_all('form'):
@@ -192,7 +205,16 @@ def attendance_layout_code(html, form):
     selects = min(len(doc.select('select')), 9)
     method = {'GET': 'G', 'POST': 'P'}.get(form.get('method'), 'U')
     submit = 'Y' if form.get('submit') else 'N'
-    return f'AT-{method}{submit}-T{tables}-D{selects}-J{int(js)}'
+    # R: exact expected attendance route found in action or page URL.
+    # M: form has the exact DynamicModel field pair expected for AJAX.
+    # X: qualifying AJAX attendance request was actually selected.
+    action_route = int(known_attendance_search(form['url']))
+    page_route = int(known_attendance_search(form['referer']))
+    fields = int(form.get('year_name') == 'DynamicModel[academicyear]'
+                 and form.get('semester_name') == 'DynamicModel[semesterid]')
+    ajax = int(attendance_ajax_form(form))
+    return (f'AT-{method}{submit}-T{tables}-D{selects}-J{int(js)}'
+            f'-R{action_route}{page_route}-M{fields}-X{ajax}')
 
 
 def parse_attendance(html):
