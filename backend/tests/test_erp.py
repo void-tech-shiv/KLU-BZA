@@ -141,3 +141,92 @@ def test_wrong_login_and_mfa_do_not_authenticate(monkeypatch):
         assert r.status_code==422 and 'secret-value' not in r.text
         session.created-=main.TTL+1
         assert c.get('/api/filters',headers=headers).status_code==401
+
+
+def test_optional_stakeholder_lookup_fails_over_to_official_login(monkeypatch):
+    """Fallback never invents authentication; official ERP still decides."""
+    main.rates.clear()
+    posted = []
+    async def fake(client, method, path, **kwargs):
+        if 'get-stakeholder-id' in path:
+            raise httpx.HTTPStatusError(
+                'Lookup temporarily unavailable',
+                request=httpx.Request('POST', erp.ORIGIN+'/lookup'),
+                response=httpx.Response(503),
+            )
+        if 'site%2Flogin' in path:
+            posted.append(kwargs['data'])
+            return httpx.Response(200, text=LOGIN)
+        raise AssertionError('Unexpected ERP endpoint')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['fallback-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/index.php?r=site%2Flogin',
+            hidden={'_csrf': 'fixture-csrf'},
+        )
+        result = c.post('/api/login',
+                        headers={'Authorization': 'Bearer fallback-test'},
+                        json={'student_id': '123', 'password': 'private-password',
+                              'captcha': 'human-entered-code'})
+        assert result.status_code == 401
+        assert len(posted) == 1
+        assert posted[0]['LoginForm[captcha]'] == 'human-entered-code'
+        assert not main.sessions['fallback-test'].authenticated
+        assert 'private-password' not in result.text
+
+
+def test_upstream_login_http_error_identifies_stage_but_hides_secrets(monkeypatch):
+    main.rates.clear()
+    async def fake(client, method, path, **kwargs):
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200, text='-2')
+        raise httpx.HTTPStatusError(
+            'Forbidden upstream',
+            request=httpx.Request('POST', erp.ORIGIN+'/login'),
+            response=httpx.Response(403),
+        )
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['error-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/login',
+            hidden={'_csrf': 'fixture-csrf'},
+        )
+        result = c.post('/api/login',
+                        headers={'Authorization': 'Bearer error-test'},
+                        json={'student_id': '123', 'password': 'private-password',
+                              'captcha': 'test-code'})
+        assert result.status_code == 502
+        assert 'ERP login returned HTTP 403' in result.text
+        assert 'private-password' not in result.text
+        assert not main.sessions['error-test'].authenticated
+
+
+def test_upstream_mfa_and_rate_limit_do_not_submit_password(monkeypatch):
+    main.rates.clear()
+    for response_code, status in [(1, 403), (429, 429)]:
+        post_calls = []
+        async def fake(client, method, path, **kwargs):
+            if 'get-stakeholder-id' in path:
+                if response_code == 1:
+                    return httpx.Response(200, text='1')
+                raise httpx.HTTPStatusError(
+                    'Rate limited',
+                    request=httpx.Request('POST', erp.ORIGIN+'/lookup'),
+                    response=httpx.Response(429),
+                )
+            post_calls.append(path)
+            raise AssertionError('Login submission must be blocked')
+        monkeypatch.setattr(erp, 'request', fake)
+        token = 'blocked-' + str(response_code)
+        with TestClient(main.app) as c:
+            main.sessions[token] = main.Session(
+                httpx.AsyncClient(), action=erp.ORIGIN+'/login',
+                hidden={'_csrf': 'fixture-csrf'},
+            )
+            result = c.post('/api/login',
+                            headers={'Authorization': 'Bearer ' + token},
+                            json={'student_id': '123', 'password': 'private-password',
+                                  'captcha': 'test-code'})
+            assert result.status_code == status
+            assert not post_calls
+            assert not main.sessions[token].authenticated
