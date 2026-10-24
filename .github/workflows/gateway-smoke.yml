@@ -49,7 +49,7 @@ jobs:
               code, body = request('/api/challenge', method='POST', data=b'{}')
               image = base64.b64decode(body.get('captcha', ''), validate=True)
               if code != 200 or not body.get('token') or not (
-                  image.startswith((b'\\x89PNG\\r\\n\\x1a\\n', b'\\xff\\xd8\\xff', b'GIF87a', b'GIF89a'))
+                  image.startswith((b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'GIF87a', b'GIF89a'))
                   or (image[:4] == b'RIFF' and image[8:12] == b'WEBP')
               ):
                   raise ValueError('CAPTCHA response is invalid')
