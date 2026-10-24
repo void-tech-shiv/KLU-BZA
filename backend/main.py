@@ -236,11 +236,20 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
             raise HTTPException(400, 'Select an available academic year and semester.')
         payload = {**f['hidden'], f['year_name']: year, f['semester_name']: semester,
                    **f['submit']}
-        if f['method'] not in ('GET','POST'):
+        if f['method'] not in ('GET', 'POST'):
             raise erp.ERPError('Unexpected attendance form method.')
+        headers = {'Referer': f['referer']}
+        # The attendance search route responds to a Yii-style AJAX form
+        # submission. Other ERP forms retain their documented GET/POST flow.
+        if f['method'] == 'POST' and erp.known_attendance_search(f['url']):
+            payload['DynamicModel[semester]'] = semester
+            headers.update({
+                'Origin': erp.ORIGIN,
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'text/html, */*;q=0.8',
+            })
         r = await erp.request(
-            session.client, f['method'], f['url'],
-            headers={'Referer': f['referer']},
+            session.client, f['method'], f['url'], headers=headers,
             **({'params': payload} if f['method'] == 'GET' else {'data': payload}))
         if erp.soup(r.text).select_one('form#login-form'):
             session.authenticated = False
