@@ -50,6 +50,14 @@ details, or JavaScript source. Students may share this code to help distinguish
 a conventional form from an AJAX-driven flow. It does **not** automatically
 guess unknown private ERP endpoints or fabricate course attendance.
 
+The `Q` suffix adds strictly structural POST response signals: content type
+(H HTML, J JSON, O other), presence of standard field-validation markup,
+bounded form count, whether the server still marks selected year/semester,
+and the number/type of upstream redirects. It never includes response HTML,
+field values, query strings, account details or token data. `Z11`, for
+example, means there was one redirect and the ERP converted POST to GET.
+These diagnostic codes are not proof of failed credentials.
+
 When no attendance has synced, dashboard component counts display em dashes,
 not misleading zeros. The selected planning target remains configurable.
 
