@@ -158,6 +158,46 @@ class _UnifiedErpBrowserViewState extends State<UnifiedErpBrowserView> {
     }
   }
 
+  Future<void> _clearErpBrowserSession() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign out of ERP browser?'),
+        content: const Text(
+          'This clears this app\'s embedded browser cookies. '
+          'It does not sign you out of Chrome or revoke other university sessions.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Clear sign-in'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await WebViewCookieManager().clearCookies();
+      await _controller.clearCache();
+      await _controller.loadRequest(erpModuleUri(_selectedModule));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Embedded ERP browser cookies cleared.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not clear embedded browser sign-in.')),
+        );
+      }
+    }
+  }
+
   Future<void> _import() async {
     if (_importing || _loading || !_allowAttendanceImport) return;
     setState(() => _importing = true);
@@ -200,6 +240,11 @@ class _UnifiedErpBrowserViewState extends State<UnifiedErpBrowserView> {
         appBar: AppBar(
           title: const Text('KLU BZA · ERP Browser'),
           actions: [
+            IconButton(
+              tooltip: 'Clear ERP browser sign-in',
+              onPressed: _importing ? null : _clearErpBrowserSession,
+              icon: const Icon(Icons.no_accounts_outlined),
+            ),
             IconButton(
               tooltip: 'Back in ERP',
               onPressed: _importing ? null : _back,
