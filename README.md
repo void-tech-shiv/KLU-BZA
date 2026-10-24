@@ -109,6 +109,34 @@ and profile parsing also remain to be verified against the current ERP
 markup with the account owner's help. Do not call green mock-based tests
 evidence of a successful production data sync.
 
+## Unified ERP Browser (Android)
+
+From the signed-in dashboard, select **Open ERP Browser · All modules**.
+The five fixed tabs are **Attendance, Profile, Overall CGPA, Timetable, and
+Exam seating**. All tabs reuse one in-app WebView/controller and the
+university's own HTTPS login session; no backend cookie forwarding or
+unverified private API endpoints. The app blocks main-frame navigation away
+from `newerp.kluniversity.in`, including HTTP and spoofed hosts.
+
+The **Attendance** tab also supports **Import visible attendance**, after
+the student selects the same academic year/semester in the app and presses
+**Search** on the university page. Only validated visible course attendance
+cells move into app memory, and the dashboard labels them as locally
+imported. Other modules are **official-page viewing**, not automatic data
+imports. They use the official website exactly as available there.
+Web builds open the relevant official module in the external browser; they
+cannot read cross-origin university data due to browser restrictions.
+
+A **Clear ERP browser sign-in** icon in the top bar clears the app's embedded
+WebView cookies. Explicit KLU BZA sign-out also clears the embedded browser
+cookies, but does not touch Chrome sessions or revoke university sessions
+outside this app. No WebView login credentials, cookies, page HTML or
+attended-course data are uploaded to Render by the browser feature.
+
+**Status:** CI/unit tests cover known-route allowlisting, session flow guards
+and import validation. Actual login flow and module rendering still need a
+real-device account-owner QA pass before merging to main or public release.
+
 ## Android phone: import from the official ERP, on device
 
 If automatic attendance sync returns only filters, use **Import from official ERP
