@@ -11,6 +11,19 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 - Responsive layout, explicit fictional demo, empty/error/loading states, sign-out and last successful sync time. Data remains visible during a failed refresh, but is cleared on logout or filter change.
 - Backend tests and CI that builds a web bundle and a **debug APK**.
 
+## Login connection troubleshooting
+
+A valid CAPTCHA on screen confirms the earlier challenge request worked, but a
+subsequent account-check or sign-in POST can still be rejected by ERP. The optional
+AJAX stakeholder lookup is used to identify accounts requiring MFA. If it returns
+a temporary 404/405/5xx error or a network failure, the gateway attempts the
+**normal official login form** once with the human-entered CAPTCHA and credentials.
+The ERP server still controls authentication; positive MFA indications,
+rate limits and unexpected account-check responses remain blocked.
+An ERP login HTTP error now names the failing stage and HTTP status without
+including account details. Never paste student credentials into GitHub issues
+or screenshots.
+
 ## Verification boundary
 
 **This is an integration preview, not a verified production student service.** Public login markup was inspected on 24 October 2026. No real student credentials were used. Login success, authenticated menu discovery, actual attendance form names/options, pagination, and session expiry still require an account-owner test. The attendance adapter infers forms from semantic field names and table headings; it fails with a visible error rather than fabricating results. Screenshots alone do not establish the authenticated HTML contract.
