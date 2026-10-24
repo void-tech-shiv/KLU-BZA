@@ -9,6 +9,7 @@ LOGIN = '''<form id="login-form" action="/index.php?r=site%2Flogin"><input type=
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8//8/AwMDEwMDAwMDAwAkBgMB/DXemwAAAABJRU5ErkJggg==')
 TABLE = '''<table><thead><tr><th>Coursecode</th><th>Coursedesc</th><th>Ltps</th><th>Total Conducted</th><th>Total Attended</th></tr></thead><tbody><tr><td>A</td><td>Algorithms</td><td>L</td><td>20</td><td>18</td></tr><tr><td>A</td><td>Algorithms</td><td>P</td><td>0</td><td>0</td></tr></tbody></table>'''
 FILTERS = '''<form action="/index.php?r=student%2Fattendance" method="get"><select name="Attendance[academicyear]"><option value="">Select</option><option value="26">2026-2027</option></select><select name="Attendance[semesterid]"><option value="1">Odd Sem</option></select></form>'''
+FILTERS_WITH_SEARCH = FILTERS.replace('</form>', '<button name="yt0" type="submit" value="Search">Search</button></form>')
 
 def test_login_fields_and_csrf():
     action, hidden, image = erp.login_form(LOGIN)
@@ -327,3 +328,49 @@ def test_unknown_login_response_never_creates_session(monkeypatch):
         assert 'does not necessarily mean your password is wrong' in r.text
         assert not main.sessions['no-evidence'].authenticated
         assert 'secret-value' not in r.text
+
+
+def test_attendance_submitter_is_included_only_when_known_search_action():
+    result = erp.attendance_form(FILTERS_WITH_SEARCH, erp.ORIGIN + '/index.php')
+    assert result['submit'] == {'yt0': 'Search'}
+    assert result['referer'].startswith('https://newerp.kluniversity.in/')
+    assert erp.attendance_form(FILTERS, erp.ORIGIN + '/')['submit'] == {}
+    malicious = FILTERS.replace(
+        '</form>', '<button type="submit" name="danger" value="Delete">Delete</button></form>')
+    assert erp.attendance_form(malicious, erp.ORIGIN + '/')['submit'] == {}
+
+
+def test_missing_results_are_not_misrepresented_as_zero_attendance():
+    with pytest.raises(erp.ERPError, match='returned attendance filters'):
+        erp.parse_attendance(FILTERS)
+    with pytest.raises(erp.ERPError, match='unfamiliar attendance columns'):
+        erp.parse_attendance('<table><tr><th>Student</th><th>Grades</th></tr><tr><td>A</td><td>B</td></tr></table>')
+
+
+def test_gateway_sends_search_button_to_erp(monkeypatch):
+    main.rates.clear()
+    calls = []
+    async def fake(client, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if 'attendance' in path and 'params' not in kwargs:
+            return httpx.Response(200, text=FILTERS_WITH_SEARCH,
+                                  request=httpx.Request('GET', erp.ORIGIN + path))
+        if 'attendance' in path and 'params' in kwargs:
+            assert kwargs['params']['yt0'] == 'Search'
+            assert kwargs['params']['Attendance[academicyear]'] == '26'
+            assert kwargs['params']['Attendance[semesterid]'] == '1'
+            assert kwargs['headers']['Referer'].startswith(erp.ORIGIN)
+            return httpx.Response(200, text=TABLE,
+                                  request=httpx.Request('GET', erp.ORIGIN + path))
+        raise AssertionError('unexpected mocked route')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as client:
+        main.sessions['search-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/login', authenticated=True,
+            page='<a href="/attendance">Attendance Register</a>',
+        )
+        r=client.get('/api/attendance?year=26&semester=1',
+                     headers={'Authorization':'Bearer search-test'})
+        assert r.status_code == 200
+        assert r.json()['rows'][0]['attended'] == 18
+        assert len(calls) == 2
