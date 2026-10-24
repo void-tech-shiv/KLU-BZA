@@ -183,10 +183,33 @@ async def login(data: Login, session: Session = Depends(get_session)):
                 502, 'ERP login connection timed out or failed. '
                      'Try again later with a new CAPTCHA.')
 
-        if not erp.authenticated(r.text):
-            raise HTTPException(401, 'Login unsuccessful. Check your details and load a new CAPTCHA.')
+        # A successful POST can return an intermediate page without a logout
+        # link. Verify the normal landing page ONCE using the same cookie jar;
+        # never repeat the password POST and never assume a 302 is a success.
+        landing = r.text
+        if not erp.authenticated(landing):
+            reason = erp.login_failure_reason(landing)
+            if reason == 'captcha':
+                raise HTTPException(
+                    401, 'ERP rejected the CAPTCHA. Tap New CAPTCHA and enter the new code.')
+            if reason == 'credentials':
+                raise HTTPException(
+                    401, 'ERP did not accept the sign-in details. Check your account '
+                         'on the official ERP website.')
+            try:
+                home = await erp.request(session.client, 'GET', '/')
+            except (httpx.HTTPError, erp.ERPError):
+                home = None
+            if home is not None and erp.authenticated(home.text):
+                landing = home.text
+
+        if not erp.authenticated(landing):
+            raise HTTPException(
+                401, 'ERP did not confirm a signed-in session. '
+                     'This does not necessarily mean your password is wrong. '
+                     'Check the official ERP website.')
         session.authenticated = True
-        session.page = r.text
+        session.page = landing
         return {'authenticated': True}
 
 async def filters(session):
