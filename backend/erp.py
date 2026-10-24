@@ -198,8 +198,29 @@ def attendance_layout_code(html, form):
 def parse_attendance(html):
     """Map semantic headings; never guess percentages or merge L/P/S rows."""
     norm = lambda x: re.sub('[^a-z0-9]', '', x.lower())
-    aliases = {'code': ['coursecode'], 'name': ['coursedesc', 'coursedescription', 'coursename'],
-               'component': ['ltps'], 'conducted': ['totalconducted'], 'attended': ['totalattended']}
+    aliases = {
+        'code': ['coursecode'],
+        'name': ['coursedesc', 'coursedescription', 'coursename', 'coursetitle'],
+        'component': ['ltps', 'component', 'classcomponent'],
+        'conducted': ['totalconducted', 'conductedhours', 'totalconductedhours',
+                      'classesconducted', 'hoursconducted'],
+        'attended': ['totalattended', 'attendedhours', 'totalattendedhours',
+                     'classesattended', 'hoursattended'],
+    }
+    # Some AJAX endpoints respond with an HTML fragment wrapped as JSON.
+    # Only process known single-level HTML-bearing keys. Never log the payload.
+    if isinstance(html, str) and html.lstrip().startswith('{'):
+        import json
+        try:
+            wrapper = json.loads(html)
+        except (ValueError, TypeError):
+            wrapper = None
+        if isinstance(wrapper, dict):
+            for key in ('html', 'content', 'table', 'data'):
+                fragment = wrapper.get(key)
+                if isinstance(fragment, str) and '<table' in fragment.lower():
+                    html = fragment
+                    break
     document = soup(html)
     if document.select('.pagination .next:not(.disabled) a[href]'):
         raise ERPError('Attendance spans multiple pages. Pagination needs verification before showing totals.')
@@ -209,14 +230,25 @@ def parse_attendance(html):
             first = table.find('tr')
             heads = [norm(h.get_text(' ', strip=True)) for h in first.find_all(['th','td'])] if first else []
         indexes = {k: next((i for i,h in enumerate(heads) if h in names), None) for k,names in aliases.items()}
-        if any(v is None for v in indexes.values()):
+        if any(indexes[k] is None for k in ('code', 'name', 'conducted', 'attended')):
             continue
+        # Component may be genuinely absent on a course-level aggregate.
+        # Preserve that absence instead of inventing an L/P/S category.
+        required_last = max(indexes[k] for k in ('code', 'name', 'conducted', 'attended'))
         rows = []
         for tr in table.select('tbody tr') or table.select('tr')[1:]:
             cells = tr.find_all('td', recursive=False)
-            if len(cells) <= max(indexes.values()):
+            if len(cells) <= required_last:
                 continue
-            row = {k: cells[i].get_text(' ', strip=True) for k,i in indexes.items()}
+            row = {
+                k: cells[indexes[k]].get_text(' ', strip=True)
+                for k in ('code', 'name', 'conducted', 'attended')
+            }
+            row['component'] = (
+                cells[indexes['component']].get_text(' ', strip=True)
+                if indexes['component'] is not None and len(cells) > indexes['component']
+                else 'Unspecified'
+            )
             try:
                 for k in ('conducted', 'attended'):
                     row[k] = int(row[k].replace(',', ''))
