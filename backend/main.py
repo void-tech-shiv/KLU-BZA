@@ -241,7 +241,7 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
         headers = {'Referer': f['referer']}
         # The attendance search route responds to a Yii-style AJAX form
         # submission. Other ERP forms retain their documented GET/POST flow.
-        if f['method'] == 'POST' and erp.known_attendance_search(f['url']):
+        if erp.attendance_ajax_form(f):
             payload['DynamicModel[semester]'] = semester
             headers.update({
                 'Origin': erp.ORIGIN,
