@@ -589,6 +589,18 @@ class _HomeState extends State<Home> {
           onPressed: busy ? null : openDemo,
           child: const Text('Explore with sample data'),
         ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: busy ? null : () => run(() => openErpBrowser('attendance')),
+          icon: const Icon(Icons.language_outlined),
+          label: const Text('Browse official ERP directly'),
+        ),
+        const Text(
+          'Open the university website without using the KLU BZA gateway. '
+          'Viewing modules here does not sign you in to the app dashboard.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+        ),
       ];
   List<Widget> dashboard() {
     final below =
