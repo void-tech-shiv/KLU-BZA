@@ -511,8 +511,10 @@ class _HomeState extends State<Home> {
         spacing: 12,
         runSpacing: 12,
         children: [
-          metric('Components', '${rows.length}', Icons.view_module_outlined),
-          metric('Below your target', '$below', Icons.flag_outlined),
+          metric('Components', synced == null ? '—' : '${rows.length}',
+              Icons.view_module_outlined),
+          metric('Below your target', synced == null ? '—' : '$below',
+              Icons.flag_outlined),
           metric('Your target', '$target%', Icons.track_changes),
         ],
       ),
@@ -619,7 +621,12 @@ class _HomeState extends State<Home> {
       if (rows.isEmpty)
         const Padding(
           padding: EdgeInsets.all(36),
-          child: Text('No attendance loaded yet.', textAlign: TextAlign.center),
+          child: Text(
+            synced == null
+                ? 'Attendance not synced yet. No course totals are available.'
+                : 'No attendance records found for this selection.',
+            textAlign: TextAlign.center,
+          ),
         ),
       LayoutBuilder(
         builder: (context, box) {
