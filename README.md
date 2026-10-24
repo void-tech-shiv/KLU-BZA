@@ -17,6 +17,21 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 
 The demo uses invented records. No supplied screenshot, student ID, password, cookies or real attendance records are committed. Timetable, marks, fees, notifications and durable offline storage are not implemented in this version.
 
+## Live free cloud gateway (Render)
+
+The student API is deployed to the **Free** Render plan in Singapore:
+
+- **HTTPS API:** https://klu-bza-student-gateway.onrender.com
+- **Health check:** https://klu-bza-student-gateway.onrender.com/health
+- **Dashboard:** https://dashboard.render.com/web/srv-dbe6ejgm7kps73cq4q5g
+- **Deploy branch:** `fix/erp-captcha-autoload` until integration checks have passed.
+
+GitHub Actions uses this public API URL by default when the repository Actions variable `API_BASE_URL` is empty. Both the downloadable debug APK and downloadable web bundle are therefore **live-configured**, not demo-only. When changing the API host, update the variable and rebuild. Never set it to a URL without HTTPS.
+
+The gateway is an **unofficial student integration preview**. Do not submit university credentials until the service owner has personally checked the upstream login/CAPTCHA flow, hosting/log retention, and KL University's integration rules. Never submit passwords in GitHub issues or chat. No account passwords or CAPTCHA responses are stored by the app; the gateway handles credentials transiently while proxying to ERP.
+
+Render's Free services can spin down after 15 minutes of inactivity; a cold start may take around a minute. Because session cookies are in the backend's process memory, any spin-down/redeploy requires the student to obtain a new CAPTCHA and sign in again. Do not treat this free test gateway as a highly available production service. The free plan has monthly resource limits.
+
 ## Run locally
 
 Requirements: Python 3.12+, Flutter stable SDK, and Android Studio/Android SDK for APKs. Run `flutter doctor` and resolve Android toolchain requirements first. Java 17 is used by CI.
