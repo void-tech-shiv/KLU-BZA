@@ -485,3 +485,25 @@ def test_unrelated_form_never_uses_attendance_ajax_header(monkeypatch):
                        headers={'Authorization': 'Bearer non-ajax-form-test'})
         assert r.status_code == 502
         assert 'X-Requested-With' not in observed[-1][2].get('headers', {})
+
+
+def test_course_level_attendance_without_ltps_is_preserved_not_invented():
+    html = ('<table><thead><tr><th>Course Code</th><th>Course Title</th>'
+            '<th>Conducted Hours</th><th>Attended Hours</th></tr></thead>'
+            '<tbody><tr><td>CS101</td><td>Algorithms</td><td>20</td><td>15</td>'
+            '</tr></tbody></table>')
+    rows = erp.parse_attendance(html)
+    assert rows == [{'code': 'CS101', 'name': 'Algorithms',
+                     'component': 'Unspecified', 'conducted': 20,
+                     'attended': 15, 'percentage': 75.0}]
+
+
+def test_safe_ajax_html_fragment_wrapper_and_existing_ltps():
+    fragment = TABLE
+    import json
+    for obj in ({'html': fragment}, {'data': fragment}):
+        data = erp.parse_attendance(json.dumps(obj))
+        assert len(data) == 2
+        assert data[0]['component'] == 'L'
+    with pytest.raises(erp.ERPError):
+        erp.parse_attendance(json.dumps({'data': [{'attended': 15, 'total': 20}]}))
