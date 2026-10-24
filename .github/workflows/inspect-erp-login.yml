@@ -1,0 +1,49 @@
+name: Inspect public ERP login structure
+on:
+  push:
+    branches:
+      - fix/erp-captcha-autoload
+    paths:
+      - .github/workflows/inspect-erp-login.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install beautifulsoup4 httpx
+      - name: Inspect public markup metadata without credentials
+        run: |
+          python - <<'PY'
+          from urllib.parse import urlsplit
+          import httpx
+          from bs4 import BeautifulSoup
+          url = 'https://newerp.kluniversity.in/'
+          with httpx.Client(timeout=25, follow_redirects=False) as client:
+              response = client.get(url)
+              print('HTTP status:', response.status_code)
+              print('Response type:', response.headers.get('content-type','').split(';')[0])
+              print('Set-Cookie names:', [x.split('=',1)[0].strip() for x in response.headers.get_list('set-cookie')])
+              print('Final host:', urlsplit(str(response.url)).hostname)
+              response.raise_for_status()
+              doc = BeautifulSoup(response.text,'html.parser')
+              for idx, form in enumerate(doc.find_all('form')):
+                  names = {i.get('name') for i in form.find_all('input') if i.get('name')}
+                  if not any('LoginForm[' in str(n) for n in names):
+                      continue
+                  action = form.get('action','')
+                  # Only public form structure. Do NOT log values/CSRF tokens/images.
+                  print('Login form id:',form.get('id','none'))
+                  print('Login action path:',urlsplit(action).path)
+                  print('Login action query route names:', list(dict(__import__('urllib.parse',fromlist=['parse_qs']).parse_qsl(urlsplit(action).query)).keys()))
+                  print('Login method:',form.get('method','GET'))
+                  print('Input names and types:',[(i.get('name'),i.get('type','text')) for i in form.find_all('input') if i.get('name')])
+                  print('Buttons:',[(b.get('name'),b.get('type')) for b in form.find_all('button')])
+                  print('CAPTCHA img selector candidates:',[(img.get('id'),bool(img.get('src')),bool(img.get('data-src'))) for img in form.find_all('img') if 'captcha' in str(img).lower()])
+          PY
