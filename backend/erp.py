@@ -208,8 +208,8 @@ def attendance_layout_code(html, form):
     # R: exact expected attendance route found in action or page URL.
     # M: form has the exact DynamicModel field pair expected for AJAX.
     # X: qualifying AJAX attendance request was actually selected.
-    action_route = int(known_attendance_search(form['url']))
-    page_route = int(known_attendance_search(form['referer']))
+    action_route = int(bool(form.get('url')) and known_attendance_search(form['url']))
+    page_route = int(bool(form.get('referer')) and known_attendance_search(form['referer']))
     fields = int(form.get('year_name') == 'DynamicModel[academicyear]'
                  and form.get('semester_name') == 'DynamicModel[semesterid]')
     ajax = int(attendance_ajax_form(form))
