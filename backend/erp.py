@@ -166,6 +166,25 @@ def attendance_form(html, page_url):
                     'years': options(year), 'semesters': options(sem)}
     raise ERPError('Attendance filters not recognized. Integration needs a sanitized page sample.')
 
+def attendance_layout_code(html, form):
+    """Expose ONLY response structure, never personal ERP HTML or field values.
+
+    A limited, fixed-alphabet diagnostic for the student to report after a
+    failed attendance refresh. No secrets, course names, IDs, URLs, or scripts.
+    """
+    doc = soup(html)
+    scripts = ' '.join(t.get_text(' ', strip=False)[:200000]
+                       for t in doc.select('script')).lower()
+    js = any(marker in scripts for marker in
+             ('pjax', 'yiigridview', '.ajax(', 'fetch(', 'xmlhttprequest'))
+    js = js or bool(doc.select('[data-pjax], [data-ajax], [data-pjax-container]'))
+    tables = min(len(doc.select('table')), 9)
+    selects = min(len(doc.select('select')), 9)
+    method = {'GET': 'G', 'POST': 'P'}.get(form.get('method'), 'U')
+    submit = 'Y' if form.get('submit') else 'N'
+    return f'AT-{method}{submit}-T{tables}-D{selects}-J{int(js)}'
+
+
 def parse_attendance(html):
     """Map semantic headings; never guess percentages or merge L/P/S rows."""
     norm = lambda x: re.sub('[^a-z0-9]', '', x.lower())
