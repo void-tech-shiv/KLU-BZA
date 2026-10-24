@@ -19,7 +19,11 @@ AJAX stakeholder lookup is used to identify accounts requiring MFA. If it return
 a temporary 404/405/5xx error or a network failure, the gateway attempts the
 **normal official login form** once with the human-entered CAPTCHA and credentials.
 The ERP server still controls authentication; positive MFA indications,
-rate limits and unexpected account-check responses remain blocked.
+rate limits and unexpected account-check responses remain blocked. The login
+POST sends the public form's empty `LoginForm[qr_code]` field alongside
+ordinary browser `Origin` and `Referer` headers; it still requires a fresh
+human-entered CAPTCHA. HTTP 403 may indicate ERP-side security policy, which
+cannot and should not be bypassed from cloud hosting.
 An ERP login HTTP error now names the failing stage and HTTP status without
 including account details. Never paste student credentials into GitHub issues
 or screenshots.
