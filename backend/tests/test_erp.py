@@ -160,6 +160,9 @@ def test_optional_stakeholder_lookup_fails_over_to_official_login(monkeypatch):
         if 'site%2Flogin' in path:
             posted.append(kwargs['data'])
             return httpx.Response(200, text=LOGIN)
+        if method == 'GET' and path == '/':
+            # A failed ERP sign-in still presents the public login screen.
+            return httpx.Response(200, text=LOGIN)
         raise AssertionError('Unexpected ERP endpoint')
     monkeypatch.setattr(erp, 'request', fake)
     with TestClient(main.app) as c:
