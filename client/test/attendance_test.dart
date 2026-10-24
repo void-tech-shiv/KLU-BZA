@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 import 'package:klu_bza/attendance.dart';
 import 'package:klu_bza/main.dart';
 
@@ -24,4 +25,15 @@ void main() {
     expect(find.text('Student sign in'), findsOneWidget);
     expect(find.text('Data Structures & Algorithms'), findsNothing);
   });
+  for (final width in [320.0, 390.0, 1200.0]) {
+    testWidgets('dashboard fits width $width', (tester) async {
+      await tester.binding.setSurfaceSize(Size(width, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(const KluApp());
+      await tester.ensureVisible(find.text('Explore with sample data'));
+      await tester.tap(find.text('Explore with sample data'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

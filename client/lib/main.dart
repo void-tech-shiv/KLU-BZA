@@ -12,20 +12,20 @@ class KluApp extends StatelessWidget {
   const KluApp({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'KLU BZA',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      scaffoldBackgroundColor: const Color(0xfff5f7fb),
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff244ad3)),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-        filled: true,
-        fillColor: Colors.white,
-      ),
-    ),
-    home: const Home(),
-  );
+        title: 'KLU BZA',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          scaffoldBackgroundColor: const Color(0xfff5f7fb),
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff244ad3)),
+          inputDecorationTheme: const InputDecorationTheme(
+            border: OutlineInputBorder(),
+            filled: true,
+            fillColor: Colors.white,
+          ),
+        ),
+        home: const Home(),
+      );
 }
 
 class Home extends StatefulWidget {
@@ -75,17 +75,16 @@ class _HomeState extends State<Home> {
       'Content-Type': 'application/json',
       if (token != null) 'Authorization': 'Bearer $token',
     };
-    final response =
-        await (method == 'POST'
-                ? client.post(
-                    uri,
-                    headers: headers,
-                    body: jsonEncode(data ?? {}),
-                  )
-                : method == 'DELETE'
+    final response = await (method == 'POST'
+            ? client.post(
+                uri,
+                headers: headers,
+                body: jsonEncode(data ?? {}),
+              )
+            : method == 'DELETE'
                 ? client.delete(uri, headers: headers)
                 : client.get(uri, headers: headers))
-            .timeout(const Duration(seconds: 60));
+        .timeout(const Duration(seconds: 60));
     Map<String, dynamic> body;
     try {
       body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -186,7 +185,10 @@ class _HomeState extends State<Home> {
     if (year == null || semester == null)
       throw Exception('Select an academic year and semester.');
     final data = await api(
-      '/api/attendance?${Uri(queryParameters: {'year': year!, 'semester': semester!}).query}',
+      '/api/attendance?${Uri(queryParameters: {
+            'year': year!,
+            'semester': semester!
+          }).query}',
     );
     setState(() {
       rows = (data['rows'] as List)
@@ -250,196 +252,200 @@ class _HomeState extends State<Home> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Row(
-        children: [
-          Icon(Icons.school_outlined),
-          SizedBox(width: 10),
-          Text('KLU BZA', style: TextStyle(fontWeight: FontWeight.w800)),
-        ],
-      ),
-      actions: [
-        if (loggedIn)
-          TextButton.icon(
-            onPressed: busy ? null : () => run(logout),
-            icon: const Icon(Icons.logout),
-            label: const Text('Sign out'),
+        appBar: AppBar(
+          title: const Row(
+            children: [
+              Icon(Icons.school_outlined),
+              SizedBox(width: 10),
+              Expanded(
+                  child: Text('KLU BZA',
+                      style: TextStyle(fontWeight: FontWeight.w800))),
+            ],
           ),
-        const SizedBox(width: 12),
-      ],
-    ),
-    body: SafeArea(
-      child: SingleChildScrollView(
-        controller: pageScroll,
-        padding: const EdgeInsets.all(24),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: loggedIn ? 1100 : 480),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (busy) const LinearProgressIndicator(),
-                if (error != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Semantics(
-                      liveRegion: true,
-                      child: Card(
-                        color: const Color(0xffffe9e7),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(error!),
+          actions: [
+            if (loggedIn)
+              TextButton.icon(
+                onPressed: busy ? null : () => run(logout),
+                icon: const Icon(Icons.logout),
+                label: const Text('Sign out'),
+              ),
+            const SizedBox(width: 12),
+          ],
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            controller: pageScroll,
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: loggedIn ? 1100 : 480),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (busy) const LinearProgressIndicator(),
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Semantics(
+                          liveRegion: true,
+                          child: Card(
+                            color: const Color(0xffffe9e7),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(error!),
+                            ),
+                          ),
                         ),
                       ),
+                    if (loggedIn) ...dashboard() else ...loginView(),
+                    const SizedBox(height: 28),
+                    const Text(
+                      'Unofficial student companion · Not affiliated with KL University',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.blueGrey, fontSize: 12),
                     ),
-                  ),
-                if (loggedIn) ...dashboard() else ...loginView(),
-                const SizedBox(height: 28),
-                const Text(
-                  'Unofficial student companion · Not affiliated with KL University',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.blueGrey, fontSize: 12),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
-    ),
-  );
+      );
   List<Widget> loginView() => [
-    const SizedBox(height: 28),
-    const Text(
-      'Your campus.\nA little simpler.',
-      style: TextStyle(fontSize: 38, fontWeight: FontWeight.w800, height: 1.15),
-    ),
-    const SizedBox(height: 14),
-    const Text(
-      'Attendance, clarity, and a plan for your next class.',
-      style: TextStyle(fontSize: 17, color: Colors.blueGrey),
-    ),
-    const SizedBox(height: 30),
-    Card(
-      elevation: 0,
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Form(
-          key: form,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'Student sign in',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text('Use your ERP ID, password and the CAPTCHA below.'),
-              const SizedBox(height: 24),
-              TextFormField(
-                controller: id,
-                enabled: !busy,
-                keyboardType: TextInputType.number,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Student ID',
-                  prefixIcon: Icon(Icons.badge_outlined),
-                ),
-                validator: (v) =>
-                    RegExp(r'^\d{1,64}$').hasMatch(v?.trim() ?? '')
-                    ? null
-                    : 'Enter your numeric student ID',
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: password,
-                enabled: !busy,
-                obscureText: hidePassword,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    tooltip: hidePassword ? 'Show password' : 'Hide password',
-                    onPressed: () =>
-                        setState(() => hidePassword = !hidePassword),
-                    icon: Icon(
-                      hidePassword
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined,
+        const SizedBox(height: 28),
+        const Text(
+          'Your campus.\nA little simpler.',
+          style: TextStyle(
+              fontSize: 38, fontWeight: FontWeight.w800, height: 1.15),
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          'Attendance, clarity, and a plan for your next class.',
+          style: TextStyle(fontSize: 17, color: Colors.blueGrey),
+        ),
+        const SizedBox(height: 30),
+        Card(
+          elevation: 0,
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Form(
+              key: form,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Student sign in',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                      'Use your ERP ID, password and the CAPTCHA below.'),
+                  const SizedBox(height: 24),
+                  TextFormField(
+                    controller: id,
+                    enabled: !busy,
+                    keyboardType: TextInputType.number,
+                    autocorrect: false,
+                    decoration: const InputDecoration(
+                      labelText: 'Student ID',
+                      prefixIcon: Icon(Icons.badge_outlined),
+                    ),
+                    validator: (v) =>
+                        RegExp(r'^\d{1,64}$').hasMatch(v?.trim() ?? '')
+                            ? null
+                            : 'Enter your numeric student ID',
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: password,
+                    enabled: !busy,
+                    obscureText: hidePassword,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: InputDecoration(
+                      labelText: 'Password',
+                      prefixIcon: const Icon(Icons.lock_outline),
+                      suffixIcon: IconButton(
+                        tooltip:
+                            hidePassword ? 'Show password' : 'Hide password',
+                        onPressed: () =>
+                            setState(() => hidePassword = !hidePassword),
+                        icon: Icon(
+                          hidePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                        ),
+                      ),
+                    ),
+                    validator: (v) =>
+                        (v == null || v.isEmpty) ? 'Enter your password' : null,
+                  ),
+                  const SizedBox(height: 18),
+                  if (captchaImage != null)
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      color: Colors.white,
+                      child: Image.memory(
+                        base64Decode(captchaImage!),
+                        height: 75,
+                        semanticLabel: 'ERP CAPTCHA challenge',
+                      ),
+                    ),
+                  TextButton.icon(
+                    onPressed:
+                        busy || apiBase.isEmpty ? null : () => run(challenge),
+                    icon: const Icon(Icons.refresh),
+                    label: Text(
+                      captchaImage == null ? 'Load ERP CAPTCHA' : 'New CAPTCHA',
                     ),
                   ),
-                ),
-                validator: (v) =>
-                    (v == null || v.isEmpty) ? 'Enter your password' : null,
-              ),
-              const SizedBox(height: 18),
-              if (captchaImage != null)
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.white,
-                  child: Image.memory(
-                    base64Decode(captchaImage!),
-                    height: 75,
-                    semanticLabel: 'ERP CAPTCHA challenge',
+                  TextFormField(
+                    controller: captcha,
+                    enabled: !busy,
+                    autocorrect: false,
+                    decoration:
+                        const InputDecoration(labelText: 'CAPTCHA code'),
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? 'Enter the code shown above'
+                        : null,
                   ),
-                ),
-              TextButton.icon(
-                onPressed: busy || apiBase.isEmpty
-                    ? null
-                    : () => run(challenge),
-                icon: const Icon(Icons.refresh),
-                label: Text(
-                  captchaImage == null ? 'Load ERP CAPTCHA' : 'New CAPTCHA',
-                ),
-              ),
-              TextFormField(
-                controller: captcha,
-                enabled: !busy,
-                autocorrect: false,
-                decoration: const InputDecoration(labelText: 'CAPTCHA code'),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Enter the code shown above'
-                    : null,
-              ),
-              const SizedBox(height: 24),
-              FilledButton(
-                onPressed: busy || apiBase.isEmpty || captchaImage == null
-                    ? null
-                    : () => run(login),
-                child: const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text('Sign in to ERP'),
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Password is sent through the configured gateway to ERP and is never saved. Sessions stay in memory.',
-                style: TextStyle(fontSize: 12, color: Colors.blueGrey),
-              ),
-              if (apiBase.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 12),
-                  child: Text(
-                    'Preview build: live ERP gateway is not configured.',
+                  const SizedBox(height: 24),
+                  FilledButton(
+                    onPressed: busy || apiBase.isEmpty || captchaImage == null
+                        ? null
+                        : () => run(login),
+                    child: const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Text('Sign in to ERP'),
+                    ),
                   ),
-                ),
-            ],
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Password is sent through the configured gateway to ERP and is never saved. Sessions stay in memory.',
+                    style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+                  ),
+                  if (apiBase.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 12),
+                      child: Text(
+                        'Preview build: live ERP gateway is not configured.',
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
-      ),
-    ),
-    const SizedBox(height: 12),
-    OutlinedButton(
-      onPressed: busy ? null : openDemo,
-      child: const Text('Explore with sample data'),
-    ),
-  ];
+        const SizedBox(height: 12),
+        OutlinedButton(
+          onPressed: busy ? null : openDemo,
+          child: const Text('Explore with sample data'),
+        ),
+      ];
   List<Widget> dashboard() {
-    final below = rows
-        .where((r) => r.percent != null && r.percent! < target)
-        .length;
+    final below =
+        rows.where((r) => r.percent != null && r.percent! < target).length;
     return [
       const SizedBox(height: 20),
       Text(
@@ -492,10 +498,10 @@ class _HomeState extends State<Home> {
                   onChanged: busy || demo
                       ? null
                       : (v) => setState(() {
-                          year = v;
-                          rows = [];
-                          synced = null;
-                        }),
+                            year = v;
+                            rows = [];
+                            synced = null;
+                          }),
                 ),
               ),
               SizedBox(
@@ -516,10 +522,10 @@ class _HomeState extends State<Home> {
                   onChanged: busy || demo
                       ? null
                       : (v) => setState(() {
-                          semester = v;
-                          rows = [];
-                          synced = null;
-                        }),
+                            semester = v;
+                            rows = [];
+                            synced = null;
+                          }),
                 ),
               ),
               FilledButton.icon(
@@ -542,9 +548,9 @@ class _HomeState extends State<Home> {
             : 'Last sync: $synced',
         style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
       ),
+      const Text('Attendance target'),
       Row(
         children: [
-          const Text('Attendance target'),
           Expanded(
             child: Slider(
               value: target.toDouble(),
@@ -570,9 +576,8 @@ class _HomeState extends State<Home> {
         ),
       LayoutBuilder(
         builder: (context, box) {
-          final width = box.maxWidth > 700
-              ? (box.maxWidth - 16) / 2
-              : box.maxWidth;
+          final width =
+              box.maxWidth > 700 ? (box.maxWidth - 16) / 2 : box.maxWidth;
           return Wrap(
             spacing: 16,
             runSpacing: 16,
@@ -586,27 +591,28 @@ class _HomeState extends State<Home> {
   }
 
   Widget metric(String label, String value, IconData icon) => SizedBox(
-    width: 190,
-    child: Card(
-      elevation: 0,
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: const Color(0xff244ad3)),
-            const SizedBox(height: 14),
-            Text(
-              value,
-              style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
+        width: 190,
+        child: Card(
+          elevation: 0,
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, color: const Color(0xff244ad3)),
+                const SizedBox(height: 14),
+                Text(
+                  value,
+                  style: const TextStyle(
+                      fontSize: 30, fontWeight: FontWeight.bold),
+                ),
+                Text(label, style: const TextStyle(color: Colors.blueGrey)),
+              ],
             ),
-            Text(label, style: const TextStyle(color: Colors.blueGrey)),
-          ],
+          ),
         ),
-      ),
-    ),
-  );
+      );
   Widget attendanceCard(Attendance r) {
     final low = r.percent != null && r.percent! < target;
     final color = low ? const Color(0xffb24d17) : const Color(0xff17765e);
@@ -640,7 +646,9 @@ class _HomeState extends State<Home> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('${r.attended} / ${r.conducted} attended'),
+                Expanded(
+                    child: Text('${r.attended} / ${r.conducted} attended')),
+                const SizedBox(width: 12),
                 Text(
                   r.percent == null ? '—' : '${r.percent!.toStringAsFixed(1)}%',
                   style: TextStyle(
@@ -664,8 +672,8 @@ class _HomeState extends State<Home> {
               r.conducted == 0
                   ? 'No classes conducted yet.'
                   : low
-                  ? 'Attend the next ${r.needed(target)} classes to reach $target%.'
-                  : 'Can miss ${r.canMiss(target)} classes and stay at $target% or above.',
+                      ? 'Attend the next ${r.needed(target)} classes to reach $target%.'
+                      : 'Can miss ${r.canMiss(target)} classes and stay at $target% or above.',
               style: TextStyle(color: color),
             ),
           ],
