@@ -82,6 +82,33 @@ The gateway is an **unofficial student integration preview**. Do not submit univ
 
 Render's Free services can spin down after 15 minutes of inactivity; a cold start may take around a minute. Because session cookies are in the backend's process memory, any spin-down/redeploy requires the student to obtain a new CAPTCHA and sign in again. Do not treat this free test gateway as a highly available production service. The free plan has monthly resource limits.
 
+## Read-only module preview
+
+KLU BZA now recognizes the fixed university ERP paths for **Overall CGPA**,
+**Timetable**, **Exam Seating**, and **Student Profile**. The gateway provides
+`GET /api/modules/{cgpa|timetable|seating|profile}` behind the existing
+authenticated, rate-limited per-user session. Requests use exactly the
+hardcoded same-origin URLs and do **not** allow URL parameters or arbitrary
+proxies. Only bounded tables or description-list text are returned to the
+student: no raw HTML, JavaScript, login fields, CSRF or session values.
+The server does not persist module data. An unknown page layout returns a
+clear unsupported-layout error rather than imaginary grades or seating.
+
+The Flutter app provides these module buttons, renders read-only text tables
+when available and offers explicit **Open official ERP** links. The browser
+may require a separate ERP login; backend session cookies are never copied
+to the browser. The attendance button can open the official page when the
+scraped results have not yet been recognized.
+
+**Live integration status:** The account owner has verified sign-in and
+academic-year/semester selection but the attendance POST still returns a filter
+page rather than a result table, most recently
+`AT-PN-T0-D2-J1-R11-M1-X1-QH03-S??-Z00`. It is an HTML response with no
+redirect or visible validation markers. Real CGPA, timetable, exam seating
+and profile parsing also remain to be verified against the current ERP
+markup with the account owner's help. Do not call green mock-based tests
+evidence of a successful production data sync.
+
 ## Run locally
 
 Requirements: Python 3.12+, Flutter stable SDK, and Android Studio/Android SDK for APKs. Run `flutter doctor` and resolve Android toolchain requirements first. Java 17 is used by CI.
