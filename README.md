@@ -38,6 +38,21 @@ An ERP login HTTP error now names the failing stage and HTTP status without
 including account details. Never paste student credentials into GitHub issues
 or screenshots.
 
+## Safe attendance diagnostics
+
+If the official ERP returns only the filter UI after the year/semester search,
+the API includes an `AT-..` layout code in its error. The code exposes only:
+form method G/P, whether a recognized named Search submit control exists,
+clamped counts of result tables and dropdowns, and a boolean marker that
+common AJAX/PJAX JavaScript is present. It contains no raw response HTML,
+page URLs, student IDs, credentials, cookies, hidden CSRF values, course
+details, or JavaScript source. Students may share this code to help distinguish
+a conventional form from an AJAX-driven flow. It does **not** automatically
+guess unknown private ERP endpoints or fabricate course attendance.
+
+When no attendance has synced, dashboard component counts display em dashes,
+not misleading zeros. The selected planning target remains configurable.
+
 ## Verification boundary
 
 **This is an integration preview, not a verified production student service.** Public login markup was inspected on 24 October 2026. No real student credentials were used. Login success, authenticated menu discovery, actual attendance form names/options, pagination, and session expiry still require an account-owner test. The attendance adapter infers forms from semantic field names and table headings; it fails with a visible error rather than fabricating results. Screenshots alone do not establish the authenticated HTML contract.
