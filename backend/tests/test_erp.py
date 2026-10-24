@@ -594,3 +594,68 @@ def test_safe_attendance_response_code_no_values_or_secrets():
     response2=httpx.Response(200,text='<html></html>',
                              headers={'content-type':'application/json'})
     assert erp.attendance_response_code(response2,form,'26','1') == 'QJ00-S??-Z00'
+
+
+def test_readonly_module_parsing_preserves_data_and_strips_unsafe_markup():
+    from backend import modules
+    html = (
+        '<form><table><thead><tr><th>Course</th><th>Grade</th></tr></thead>'
+        '<tbody><tr><td>Maths</td><td>A</td></tr></tbody></table></form>'
+        '<script>window.secret="do-not-return";</script>')
+    parsed = modules.parse_readonly_page(html)
+    assert parsed == [{'columns': ['Course', 'Grade'], 'rows': [['Maths','A']]}]
+    assert 'do-not-return' not in str(parsed)
+    assert all('newerp.kluniversity.in' in erp.safe_url(route)
+               for _,route in modules.MODULES.values())
+
+
+def test_readonly_module_hidden_input_and_security_fields_are_excluded():
+    from backend import modules
+    html=('<table><tr><td>Password</td><td>12345</td></tr>'
+          '<tr><td>Class</td><td>CSE</td></tr></table>'
+          '<input type="hidden" name="_csrf" value="sensitive-secret">')
+    parsed=modules.parse_readonly_page(html)
+    assert parsed[0]['rows'] == [['Class','CSE']]
+    assert 'sensitive-secret' not in str(parsed)
+    assert '12345' not in str(parsed)
+    with pytest.raises(erp.ERPError, match='data layout'):
+        modules.parse_readonly_page('<html><h1>No tables</h1></html>')
+
+
+def test_readonly_module_requires_session_and_rejects_unknown_routes(monkeypatch):
+    from backend import modules
+    main.rates.clear()
+    reqs=[]
+    async def fake(client, method, path, **kwargs):
+        reqs.append((method,path))
+        return httpx.Response(
+            200,
+            text='<table><thead><tr><th>Subject</th><th>Value</th></tr></thead>'
+                 '<tbody><tr><td>Mathematics</td><td>7.3</td></tr></tbody></table>')
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        assert c.get('/api/modules/profile').status_code==401
+        main.sessions['modules-test']=main.Session(httpx.AsyncClient(), authenticated=True)
+        auth={'Authorization':'Bearer modules-test'}
+        assert c.get('/api/modules/arbitrary',headers=auth).status_code==404
+        assert not reqs
+        for module in modules.MODULES:
+            r=c.get('/api/modules/'+module,headers=auth)
+            assert r.status_code==200, r.text
+            assert r.json()['tables'][0]['rows'][0] == ['Mathematics','7.3']
+        assert len(reqs)==4
+        assert all(method=='GET' for method,_ in reqs)
+        assert [p for _,p in reqs] == [v[1] for v in modules.MODULES.values()]
+
+
+def test_readonly_module_signin_failure_cannot_expose_fields(monkeypatch):
+    main.rates.clear()
+    async def fake(client, method, path, **kwargs):
+        return httpx.Response(200,text=LOGIN)
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        main.sessions['modules-expired']=main.Session(httpx.AsyncClient(), authenticated=True)
+        r=c.get('/api/modules/cgpa',headers={'Authorization':'Bearer modules-expired'})
+        assert r.status_code==401
+        assert not main.sessions['modules-expired'].authenticated
+        assert 'LoginForm[password]' not in r.text
