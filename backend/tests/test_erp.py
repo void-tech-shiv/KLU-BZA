@@ -1,10 +1,12 @@
 import asyncio
+import base64
 import pytest
 import httpx
 from fastapi.testclient import TestClient
 from backend import erp, main
 
 LOGIN = '''<form id="login-form" action="/index.php?r=site%2Flogin"><input type="hidden" name="_csrf" value="csrf"><input name="LoginForm[username]"><input name="LoginForm[password]"><input name="LoginForm[captcha]"><img id="loginFormCaptcha-image" src="/captcha"></form>'''
+PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8//8/AwMDEwMDAwMDAwAkBgMB/DXemwAAAABJRU5ErkJggg==')
 TABLE = '''<table><thead><tr><th>Coursecode</th><th>Coursedesc</th><th>Ltps</th><th>Total Conducted</th><th>Total Attended</th></tr></thead><tbody><tr><td>A</td><td>Algorithms</td><td>L</td><td>20</td><td>18</td></tr><tr><td>A</td><td>Algorithms</td><td>P</td><td>0</td><td>0</td></tr></tbody></table>'''
 FILTERS = '''<form action="/index.php?r=student%2Fattendance" method="get"><select name="Attendance[academicyear]"><option value="">Select</option><option value="26">2026-2027</option></select><select name="Attendance[semesterid]"><option value="1">Odd Sem</option></select></form>'''
 
@@ -13,6 +15,30 @@ def test_login_fields_and_csrf():
     assert action.endswith('site%2Flogin') and hidden == {'_csrf':'csrf'}
     assert image == erp.ORIGIN + '/captcha'
     with pytest.raises(erp.ERPError): erp.login_form('<html>changed</html>')
+
+
+def test_login_without_form_id_and_lazy_captcha():
+    html = LOGIN.replace('id="login-form"', '').replace(
+        'id="loginFormCaptcha-image" src="/captcha"', 'data-src="/captcha"')
+    action, hidden, url = erp.login_form(html)
+    assert 'site%2Flogin' in action
+    assert hidden == {'_csrf': 'csrf'}
+    assert url == erp.ORIGIN + '/captcha'
+
+
+@pytest.mark.parametrize('mime,data', [
+    ('text/html', b'<html>temporarily unavailable</html>'),
+    ('image/png', b'not an image'),
+    ('image/png', b''),
+    ('image/svg+xml', b'<svg></svg>'),
+])
+def test_invalid_captcha_response_is_rejected(mime, data):
+    response = httpx.Response(200, content=data, headers={'content-type': mime})
+    with pytest.raises(erp.ERPError, match='invalid CAPTCHA'):
+        erp.captcha_image(response)
+    assert erp.captcha_image(httpx.Response(
+        200, content=PNG, headers={'content-type': 'image/png'})) == PNG
+
 
 @pytest.mark.parametrize('url',['https://evil.test/','//evil.test/x','http://newerp.kluniversity.in','https://newerp.kluniversity.in.evil.test/','https://user@newerp.kluniversity.in/'])
 def test_destination_guard(url):
@@ -56,7 +82,7 @@ def test_cross_origin_redirect_blocked():
 def test_api_flow_and_session_isolation(monkeypatch):
     async def fake(client,method,path,**kwargs):
         if path=='/': text=LOGIN
-        elif path.endswith('/captcha'): return httpx.Response(200,content=b'image',headers={'content-type':'image/png'})
+        elif path.endswith('/captcha'): return httpx.Response(200,content=PNG,headers={'content-type':'image/png'})
         elif 'get-stakeholder-id' in path: text='-2'
         elif 'site%2Flogin' in path:
             assert kwargs['data']['LoginForm[password]']=='test-only-password'
@@ -70,7 +96,11 @@ def test_api_flow_and_session_isolation(monkeypatch):
     monkeypatch.setattr(erp,'request',fake)
     main.rates.clear()
     with TestClient(main.app) as c:
-        a=c.post('/api/challenge').json()['token']; b=c.post('/api/challenge').json()['token']
+        first=c.post('/api/challenge')
+        assert first.status_code == 200
+        assert base64.b64decode(first.json()['captcha']) == PNG
+        assert first.headers['cache-control'] == 'no-store'
+        a=first.json()['token']; b=c.post('/api/challenge').json()['token']
         headers={'Authorization':'Bearer '+a}
         assert c.get('/api/filters',headers={'Authorization':'Bearer '+b}).status_code==401
         response=c.post('/api/login',headers=headers,json={'student_id':'123','password':'test-only-password','captcha':'ABCD'})
