@@ -414,3 +414,74 @@ def test_filter_only_response_returns_safe_layout_code(monkeypatch):
         assert 'AT-GN-T0-D2-J1' in r.text
         assert 'hidden-example' not in r.text
         assert 'private-id-test' not in r.text
+
+
+ATTENDANCE_AJAX_PATH = '/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput'
+ATTENDANCE_AJAX_FORM = (
+    '<form action="' + ATTENDANCE_AJAX_PATH + '" method="post">'
+    '<input type="hidden" name="_csrf" value="test-token">'
+    '<select name="DynamicModel[academicyear]">'
+    '<option value="26">2026-2027</option></select>'
+    '<select name="DynamicModel[semesterid]">'
+    '<option value="1">Odd Sem</option></select>'
+    '<button type="submit">Search</button></form>'
+)
+
+
+def test_known_attendance_route_is_exact_and_same_origin():
+    assert erp.known_attendance_search(erp.ORIGIN + ATTENDANCE_AJAX_PATH)
+    assert not erp.known_attendance_search(erp.ORIGIN + '/index.php?r=other%2Fendpoint')
+    with pytest.raises(erp.ERPError):
+        erp.known_attendance_search('https://other.example/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput')
+
+
+def test_ajax_attendance_search_has_required_fields_and_headers(monkeypatch):
+    main.rates.clear()
+    observed = []
+    async def fake(client, method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        req = httpx.Request(method, erp.safe_url(path))
+        if method == 'GET':
+            return httpx.Response(200, text=ATTENDANCE_AJAX_FORM, request=req)
+        assert method == 'POST'
+        assert erp.known_attendance_search(path)
+        assert kwargs['data']['DynamicModel[academicyear]'] == '26'
+        assert kwargs['data']['DynamicModel[semesterid]'] == '1'
+        assert kwargs['data']['DynamicModel[semester]'] == '1'
+        assert kwargs['data']['_csrf'] == 'test-token'
+        assert kwargs['headers']['X-Requested-With'] == 'XMLHttpRequest'
+        assert kwargs['headers']['Origin'] == erp.ORIGIN
+        assert kwargs['headers']['Referer'].startswith(erp.ORIGIN)
+        return httpx.Response(200, text=TABLE, request=req)
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as client:
+        main.sessions['ajax-search-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN + '/login',
+            authenticated=True,
+            page='<a href="' + ATTENDANCE_AJAX_PATH + '">Attendance Register</a>',
+        )
+        r = client.get('/api/attendance?year=26&semester=1',
+                       headers={'Authorization': 'Bearer ajax-search-test'})
+        assert r.status_code == 200, r.text
+        assert r.json()['rows'][0]['attended'] == 18
+        assert [m for m, _, _ in observed] == ['GET', 'POST']
+
+
+def test_unrelated_form_never_uses_attendance_ajax_header(monkeypatch):
+    main.rates.clear()
+    observed = []
+    async def fake(client, method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        req = httpx.Request(method, erp.safe_url(path))
+        if method == 'GET':
+            return httpx.Response(200, text=FILTERS, request=req)
+        raise AssertionError('Only a GET form submission is expected')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as client:
+        main.sessions['non-ajax-form-test'] = main.Session(
+            httpx.AsyncClient(), authenticated=True,
+            page='<a href="/index.php?r=student%2Fattendance">Attendance Register</a>')
+        r = client.get('/api/attendance?year=26&semester=1',
+                       headers={'Authorization': 'Bearer non-ajax-form-test'})
+        assert r.status_code == 502
+        assert 'X-Requested-With' not in observed[-1][2].get('headers', {})
