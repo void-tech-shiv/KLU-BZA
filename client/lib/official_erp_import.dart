@@ -15,7 +15,7 @@ const _attendanceUrl =
 // CAPTCHA, form actions, cookies, localStorage, tokens or student identity.
 const _extractVisibleAttendance = r"""
 (() => {
-  const clean = (x) => (x || '').replace(/\\s+/g, ' ').trim();
+  const clean = (x) => (x || '').replace(/\s+/g, ' ').trim();
   const norm = (x) => clean(x).toLowerCase().replace(/[^a-z0-9]/g, '');
   const aliases = {
     code: ['coursecode'],
