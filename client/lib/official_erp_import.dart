@@ -5,14 +5,11 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import 'attendance.dart';
 import 'attendance_import.dart';
+import 'erp_browser_routes.dart';
 
-const _officialHost = 'newerp.kluniversity.in';
-const _attendanceUrl =
-    'https://newerp.kluniversity.in/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput';
-
-// Executed only after the student presses "Import visible attendance".
-// Read only the marked course table. Never access input fields, credentials,
-// CAPTCHA, form actions, cookies, localStorage, tokens or student identity.
+// Only an explicit import tap may read structured visible attendance cells.
+// Credentials, CAPTCHA, form fields, storage, cookies and HTML are untouched.
+// The result is returned to app memory, not posted to the backend.
 const _extractVisibleAttendance = r"""
 (() => {
   const clean = (x) => (x || '').replace(/\s+/g, ' ').trim();
@@ -27,6 +24,8 @@ const _extractVisibleAttendance = r"""
     semester: ['semester']
   };
   for (const table of Array.from(document.querySelectorAll('table'))) {
+    // Do not use hidden tables/templates, even when their headings match.
+    if (!table.getClientRects().length || getComputedStyle(table).visibility === 'hidden') continue;
     const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
     if (!headerRow) continue;
     const headers = Array.from(headerRow.children).map(el => norm(el.textContent));
@@ -54,86 +53,131 @@ const _extractVisibleAttendance = r"""
 })()
 """;
 
-/// Android's native webview runs the official ERP page directly on the device.
-/// Never forwards WebView cookies or scraped records to the backend.
-class OfficialErpImportView extends StatefulWidget {
-  const OfficialErpImportView({
+/// One in-app browser with a single WebView controller and shared site cookies
+/// across fixed, allowlisted university modules. ERP sign-in happens on the
+/// university site, not through a proxy or a copied gateway session.
+class UnifiedErpBrowserView extends StatefulWidget {
+  const UnifiedErpBrowserView({
     super.key,
-    required this.expectedYear,
-    required this.expectedSemester,
+    this.initialModule = 'attendance',
+    this.expectedYear,
+    this.expectedSemester,
   });
 
-  final String expectedYear;
-  final String expectedSemester;
+  final String initialModule;
+  final String? expectedYear;
+  final String? expectedSemester;
 
   @override
-  State<OfficialErpImportView> createState() => _OfficialErpImportViewState();
+  State<UnifiedErpBrowserView> createState() => _UnifiedErpBrowserViewState();
 }
 
-class _OfficialErpImportViewState extends State<OfficialErpImportView> {
+class _UnifiedErpBrowserViewState extends State<UnifiedErpBrowserView> {
   late final WebViewController _controller;
+  late String _selectedModule;
   bool _loading = true;
   bool _importing = false;
+
+  bool get _allowAttendanceImport =>
+      _selectedModule == 'attendance' &&
+      (widget.expectedYear?.isNotEmpty ?? false) &&
+      (widget.expectedSemester?.isNotEmpty ?? false);
 
   @override
   void initState() {
     super.initState();
+    _selectedModule = erpRoutes.containsKey(widget.initialModule)
+        ? widget.initialModule
+        : 'attendance';
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) {
-          if (mounted) setState(() => _loading = true);
-        },
-        onPageFinished: (_) {
-          if (mounted) setState(() => _loading = false);
-        },
-        onNavigationRequest: (request) {
-          if (!request.isMainFrame) return NavigationDecision.navigate;
-          final url = Uri.tryParse(request.url);
-          // Restrict the login view to HTTPS and the exact college ERP host.
-          // Never follow redirects to third-party login or lookalike hosts.
-          if (url != null &&
-              url.scheme == 'https' &&
-              url.host == _officialHost &&
-              url.userInfo.isEmpty &&
-              url.port == 443) {
-            return NavigationDecision.navigate;
-          }
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Only official HTTPS ERP pages open here. '
-                  'Use your browser for other links.',
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (_) {
+            if (mounted) setState(() => _loading = true);
+          },
+          onPageFinished: (_) {
+            if (mounted) setState(() => _loading = false);
+          },
+          onNavigationRequest: (request) {
+            if (!request.isMainFrame) return NavigationDecision.navigate;
+            if (isOfficialErpUrl(request.url)) {
+              return NavigationDecision.navigate;
+            }
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'This browser opens only the official university ERP. '
+                    'Use your regular browser for external links.',
+                  ),
                 ),
-              ),
-            );
-          }
-          return NavigationDecision.prevent;
-        },
-      ))
-      ..loadRequest(Uri.parse(_attendanceUrl));
+              );
+            }
+            return NavigationDecision.prevent;
+          },
+        ),
+      )
+      ..loadRequest(erpModuleUri(_selectedModule));
+  }
+
+  Future<void> _openSection(String section) async {
+    if (!erpRoutes.containsKey(section) || _importing) return;
+    setState(() {
+      _selectedModule = section;
+      _loading = true;
+    });
+    try {
+      // Reuse the SAME WebView controller. Never export its cookies.
+      await _controller.loadRequest(erpModuleUri(section));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open this ERP section.')),
+      );
+    }
+  }
+
+  Future<void> _reload() async {
+    try {
+      await _controller.reload();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ERP page could not be refreshed.')),
+      );
+    }
+  }
+
+  Future<void> _back() async {
+    if (await _controller.canGoBack()) {
+      await _controller.goBack();
+    } else if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _import() async {
-    if (_importing) return;
+    if (_importing || _loading || !_allowAttendanceImport) return;
     setState(() => _importing = true);
     try {
-      final active = Uri.tryParse(await _controller.currentUrl() ?? '');
-      if (active == null ||
-          active.scheme != 'https' ||
-          active.host != _officialHost ||
-          active.userInfo.isNotEmpty) {
-        throw const FormatException('Open the official ERP page before importing.');
+      final currentUrl = await _controller.currentUrl();
+      if (currentUrl == null || !isOfficialErpUrl(currentUrl)) {
+        throw const FormatException(
+          'Open the official ERP Attendance Register before importing.',
+        );
       }
-      final result = await _controller.runJavaScriptReturningResult(
+      // Script reads a known attendance table only, never student identity or
+      // session data. The strict Dart parser validates the selected term.
+      final output = await _controller.runJavaScriptReturningResult(
         _extractVisibleAttendance,
       );
-      final serialized = result is String ? result : jsonEncode(result);
+      final serialized = output is String ? output : jsonEncode(output);
       final rows = parseVisibleAttendance(
         serialized,
-        expectedYear: widget.expectedYear,
-        expectedSemester: widget.expectedSemester,
+        expectedYear: widget.expectedYear!,
+        expectedSemester: widget.expectedSemester!,
       );
       if (!mounted) return;
       Navigator.of(context).pop<List<Attendance>>(rows);
@@ -141,8 +185,8 @@ class _OfficialErpImportViewState extends State<OfficialErpImportView> {
       if (!mounted) return;
       final message = e is FormatException
           ? e.message
-          : 'Could not read the visible attendance. '
-              'Search again on the official ERP and retry.';
+          : 'Attendance is not readable yet. On the official page, '
+              'choose the same term and press Search before importing.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
       );
@@ -153,35 +197,98 @@ class _OfficialErpImportViewState extends State<OfficialErpImportView> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Official ERP attendance')),
+        appBar: AppBar(
+          title: const Text('KLU BZA · ERP Browser'),
+          actions: [
+            IconButton(
+              tooltip: 'Back in ERP',
+              onPressed: _importing ? null : _back,
+              icon: const Icon(Icons.arrow_back),
+            ),
+            IconButton(
+              tooltip: 'Reload ERP',
+              onPressed: _importing ? null : _reload,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ),
         body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Padding(
-              padding: EdgeInsets.fromLTRB(12, 6, 12, 6),
+              padding: EdgeInsets.fromLTRB(14, 6, 14, 4),
+              child: Row(
+                children: [
+                  Icon(Icons.verified_user_outlined, size: 17,
+                      color: Colors.green),
+                  SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      'Official university website · newerp.kluniversity.in',
+                      style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 56,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  for (final section in erpRoutes.keys)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(erpTitles[section] ?? section),
+                        selected: _selectedModule == section,
+                        onSelected: _importing || _loading
+                            ? null
+                            : (_) => _openSection(section),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               child: Text(
-                'Official site: newerp.kluniversity.in. '
-                'Sign in here, select year and semester, then press Search. '
-                'Import reads only visible course attendance after your tap. '
-                'No ERP password or page data is uploaded to KLU BZA.',
-                style: TextStyle(fontSize: 12),
+                'Sign in on the official site when prompted. '
+                'Your browser session is separate from KLU BZA cloud login.',
+                style: TextStyle(fontSize: 12, color: Colors.blueGrey),
               ),
             ),
             if (_loading) const LinearProgressIndicator(),
             Expanded(child: WebViewWidget(controller: _controller)),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: FilledButton.icon(
-                  onPressed: _loading || _importing ? null : _import,
-                  icon: const Icon(Icons.download_for_offline_outlined),
-                  label: Text(_importing
-                      ? 'Reading visible table…'
-                      : 'Import visible attendance'),
+            if (_allowAttendanceImport)
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                  child: FilledButton.icon(
+                    onPressed: _loading || _importing ? null : _import,
+                    icon: const Icon(Icons.file_download_outlined),
+                    label: Text(_importing
+                        ? 'Reading visible attendance…'
+                        : 'Import visible attendance'),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       );
+}
+
+/// Backwards-compatible entry point for existing attendance links.
+class OfficialErpImportView extends UnifiedErpBrowserView {
+  const OfficialErpImportView({
+    super.key,
+    required String expectedYear,
+    required String expectedSemester,
+  }) : super(
+          initialModule: 'attendance',
+          expectedYear: expectedYear,
+          expectedSemester: expectedSemester,
+        );
 }
