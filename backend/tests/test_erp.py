@@ -374,3 +374,43 @@ def test_gateway_sends_search_button_to_erp(monkeypatch):
         assert r.status_code == 200, r.text
         assert r.json()['rows'][0]['attended'] == 18
         assert len(calls) == 2
+
+
+def test_structure_diagnostic_exposes_no_credentials_or_attendance():
+    private_page = (
+        '<form action="/index.php?r=student%2Fattendance">'
+        '<select name="Attendance[academicyear]"><option>2026-2027</option></select>'
+        '<input name="student" value="private-roll-number">'
+        '<input name="_csrf" value="sensitive-CSRF-secret"></form>'
+        '<script>yiiGridView.init("student-private-data"); $.pjax.reload({});</script>')
+    layout = {'method': 'GET', 'submit': {}}
+    code = erp.attendance_layout_code(private_page, layout)
+    assert code == 'AT-GN-T0-D1-J1'
+    for secret in ('private-roll-number', 'sensitive-CSRF-secret', 'student-private-data', '2026-2027'):
+        assert secret not in code
+    assert erp.attendance_layout_code('<html><table></table></html>',
+                                      {'method':'POST', 'submit':{'yt0':'Search'}}) == 'AT-PY-T1-D0-J0'
+
+
+def test_filter_only_response_returns_safe_layout_code(monkeypatch):
+    main.rates.clear()
+    def response(text):
+        return httpx.Response(200, text=text,
+             request=httpx.Request('GET', erp.ORIGIN + '/attendance'))
+    async def fake(client, method, path, **kwargs):
+        if 'params' in kwargs:
+            return response(
+                FILTERS + '<script>yiiGridView.init("hidden-example")</script>'
+                '<input value="private-id-test">')
+        return response(FILTERS)
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['structure-test'] = main.Session(
+            httpx.AsyncClient(), action=erp.ORIGIN+'/login',
+            authenticated=True, page='<a href="/attendance">Attendance Register</a>')
+        r=c.get('/api/attendance?year=26&semester=1',
+                headers={'Authorization': 'Bearer structure-test'})
+        assert r.status_code == 502
+        assert 'AT-GN-T0-D2-J1' in r.text
+        assert 'hidden-example' not in r.text
+        assert 'private-id-test' not in r.text
