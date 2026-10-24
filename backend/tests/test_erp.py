@@ -385,7 +385,7 @@ def test_structure_diagnostic_exposes_no_credentials_or_attendance():
         '<script>yiiGridView.init("student-private-data"); $.pjax.reload({});</script>')
     layout = {'method': 'GET', 'submit': {}}
     code = erp.attendance_layout_code(private_page, layout)
-    assert code == 'AT-GN-T0-D1-J1'
+    assert code == 'AT-GN-T0-D1-J1-R00-M0-X0'
     for secret in ('private-roll-number', 'sensitive-CSRF-secret', 'student-private-data', '2026-2027'):
         assert secret not in code
     assert erp.attendance_layout_code('<html><table></table></html>',
