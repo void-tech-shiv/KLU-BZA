@@ -112,6 +112,9 @@ evidence of a successful production data sync.
 ## Unified ERP Browser (Android)
 
 From the signed-in dashboard, select **Open ERP Browser · All modules**.
+The sign-in screen also has **Browse official ERP directly**, which opens
+university pages even without a KLU BZA cloud session. A direct browser login
+does not automatically authenticate the separate FastAPI dashboard.
 The five fixed tabs are **Attendance, Profile, Overall CGPA, Timetable, and
 Exam seating**. All tabs reuse one in-app WebView/controller and the
 university's own HTTPS login session; no backend cookie forwarding or
