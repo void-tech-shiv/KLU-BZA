@@ -22,11 +22,16 @@ async def request(client, method, path, **kwargs):
         query = dict(parse_qsl(parts.query))
         query.update(kwargs.pop('params'))
         url = urlunsplit(parts._replace(query=urlencode(query)))
+    redirects = 0
+    switched_method = False
     for _ in range(6):
         r = await client.request(method, url, **kwargs)
         if r.status_code in (301, 302, 303, 307, 308):
+            redirects += 1
             url = safe_url(urljoin(url, r.headers.get('location', '')))
             if r.status_code in (301, 302, 303):
+                if method.upper() != 'GET':
+                    switched_method = True
                 method, kwargs = 'GET', {}
             continue
         if r.status_code == 429:
@@ -34,6 +39,10 @@ async def request(client, method, path, **kwargs):
         r.raise_for_status()
         if len(r.content) > 4_000_000:
             raise ERPError('ERP response exceeds the supported size.')
+        # Fixed, non-sensitive metadata attached only to this in-memory response.
+        # Do not log or expose URLs, headers, HTML, credentials or cookies.
+        r.extensions['erp_redirects'] = min(redirects, 9)
+        r.extensions['erp_post_to_get'] = switched_method
         return r
     raise ERPError('ERP redirected too many times.')
 
@@ -215,6 +224,39 @@ def attendance_layout_code(html, form):
     ajax = int(attendance_ajax_form(form))
     return (f'AT-{method}{submit}-T{tables}-D{selects}-J{int(js)}'
             f'-R{action_route}{page_route}-M{fields}-X{ajax}')
+
+
+def attendance_response_code(response, request_form, selected_year, selected_semester):
+    """Bounded response diagnostics. All output symbols have fixed vocabularies.
+
+    No passwords, IDs, CSRF values, course data, cookies, URLs or HTML text.
+    """
+    kind = response.headers.get('content-type', '').lower().split(';')[0].strip()
+    ctype = 'H' if kind in ('text/html', 'application/xhtml+xml') else (
+        'J' if kind in ('application/json', 'text/json') else 'O')
+    doc = soup(response.text if ctype == 'H' else '')
+    has_validation = bool(doc.select(
+        '.has-error, .is-invalid, .invalid-feedback, .help-block-error, '
+        '.alert-danger, .field-validation-error, [aria-invalid="true"]'))
+    form_count = min(len(doc.select('form')), 9)
+    # Detect if the returned filter form explicitly selected what was
+    # requested. Report only whether a match is visible, never values.
+    select_matches = []
+    for field_name, expected in (
+        (request_form['year_name'], selected_year),
+        (request_form['semester_name'], selected_semester),
+    ):
+        found = doc.find('select', attrs={'name': field_name})
+        if found is None:
+            select_matches.append('?')
+        else:
+            selected = [x.get('value', '') for x in found.select('option[selected]')]
+            select_matches.append('Y' if expected in selected else (
+                'N' if selected else '?'))
+    redirects = min(int(response.extensions.get('erp_redirects', 0)), 9)
+    method_switched = int(bool(response.extensions.get('erp_post_to_get', False)))
+    return (f'Q{ctype}{int(has_validation)}{form_count}'
+            f'-S{"".join(select_matches)}-Z{redirects}{method_switched}')
 
 
 def parse_attendance(html):
