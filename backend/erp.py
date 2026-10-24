@@ -41,20 +41,48 @@ def soup(html):
     return BeautifulSoup(html, 'html.parser')
 
 def login_form(html):
-    form = soup(html).select_one('form#login-form')
-    if not form:
-        raise ERPError('ERP login layout changed. Please use the official ERP.')
+    document = soup(html)
+    required = ('LoginForm[username]', 'LoginForm[password]', 'LoginForm[captcha]')
+    # Some Yii themes omit the form id; the three expected field names remain mandatory.
+    form = next(
+        (f for f in document.select('form')
+         if all(f.find('input', attrs={'name': name}) is not None for name in required)),
+        None,
+    )
+    if form is None:
+        raise ERPError('ERP login fields could not be verified. Please use the official ERP.')
+    img = (form.select_one('#loginFormCaptcha-image')
+           or form.select_one('img[src*="captcha" i]')
+           or form.select_one('img[data-src*="captcha" i]')
+           or form.select_one('img[id*="captcha" i]'))
+    image_src = (img.get('src') or img.get('data-src')) if img else None
+    if not image_src:
+        raise ERPError('ERP CAPTCHA source could not be identified. Please use the official ERP.')
     hidden = {i['name']: i.get('value', '') for i in form.select('input[type=hidden][name]')}
-    img = form.select_one('#loginFormCaptcha-image')
-    required = ['LoginForm[username]', 'LoginForm[password]', 'LoginForm[captcha]']
-    if not img or any(not form.find('input', attrs={'name': n}) for n in required):
-        raise ERPError('ERP login fields could not be verified.')
-    return safe_url(form.get('action', '/')), hidden, safe_url(img['src'])
+    return safe_url(form.get('action', '/')), hidden, safe_url(image_src)
+
+
+def captcha_image(response):
+    """Accept small, actual raster images, never HTML error pages or SVG."""
+    data = response.content
+    mime = response.headers.get('content-type', '').split(';')[0].strip().lower()
+    signatures = {
+        'image/png': data.startswith(b'\x89PNG\r\n\x1a\n'),
+        'image/jpeg': data.startswith(b'\xff\xd8\xff'),
+        'image/gif': data.startswith((b'GIF87a', b'GIF89a')),
+        'image/webp': len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP',
+    }
+    if not data or len(data) > 256_000 or not signatures.get(mime, False):
+        raise ERPError('ERP returned an invalid CAPTCHA image. Tap New CAPTCHA to retry.')
+    return data
+
 
 def authenticated(html):
-    s = soup(html)
-    return not s.select_one('form#login-form') and any(
-        'logout' in a.get('href', '').lower() for a in s.select('a[href]'))
+    document = soup(html)
+    # Only treat a page as signed in with positive logout evidence AND no login fields.
+    if document.find('input', attrs={'name': 'LoginForm[password]'}) is not None:
+        return False
+    return any('logout' in a.get('href', '').lower() for a in document.select('a[href]'))
 
 def attendance_link(html):
     for a in soup(html).select('a[href]'):

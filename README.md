@@ -5,7 +5,8 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 ## What is implemented
 
 - Student ID, password and human-entered ERP CAPTCHA; no MFA field. Accounts for which ERP requires MFA are directed to the official ERP.
-- Fresh per-user HTTP cookie jars, CSRF forwarding, CAPTCHA fetch, student MFA lookup and login submission based on the observed public ERP form.
+- Fresh per-user HTTP cookie jars, CSRF forwarding, CAPTCHA fetch (automatically on launch with a configured gateway), student MFA lookup and login submission based on the observed public ERP form.
+- CAPTCHA refresh survives an expired prior session; invalid upstream CAPTCHA responses are rejected rather than displayed as broken images.
 - Semantic attendance parser, academic-year and semester filters, separate L/P/S component cards, selectable attendance target and catch-up/miss calculations.
 - Responsive layout, explicit fictional demo, empty/error/loading states, sign-out and last successful sync time. Data remains visible during a failed refresh, but is cleared on logout or filter change.
 - Backend tests and CI that builds a web bundle and a **debug APK**.
@@ -15,6 +16,21 @@ Unofficial student attendance companion for KL University Vijayawada. One Flutte
 **This is an integration preview, not a verified production student service.** Public login markup was inspected on 24 October 2026. No real student credentials were used. Login success, authenticated menu discovery, actual attendance form names/options, pagination, and session expiry still require an account-owner test. The attendance adapter infers forms from semantic field names and table headings; it fails with a visible error rather than fabricating results. Screenshots alone do not establish the authenticated HTML contract.
 
 The demo uses invented records. No supplied screenshot, student ID, password, cookies or real attendance records are committed. Timetable, marks, fees, notifications and durable offline storage are not implemented in this version.
+
+## Live free cloud gateway (Render)
+
+The student API is deployed to the **Free** Render plan in Singapore:
+
+- **HTTPS API:** https://klu-bza-student-gateway.onrender.com
+- **Health check:** https://klu-bza-student-gateway.onrender.com/health
+- **Dashboard:** https://dashboard.render.com/web/srv-dbe6ejgm7kps73cq4q5g
+- **Deploy branch:** `fix/erp-captcha-autoload` until integration checks have passed.
+
+GitHub Actions uses this public API URL by default when the repository Actions variable `API_BASE_URL` is empty. Both the downloadable debug APK and downloadable web bundle are therefore **live-configured**, not demo-only. When changing the API host, update the variable and rebuild. Never set it to a URL without HTTPS.
+
+The gateway is an **unofficial student integration preview**. Do not submit university credentials until the service owner has personally checked the upstream login/CAPTCHA flow, hosting/log retention, and KL University's integration rules. Never submit passwords in GitHub issues or chat. No account passwords or CAPTCHA responses are stored by the app; the gateway handles credentials transiently while proxying to ERP.
+
+Render's Free services can spin down after 15 minutes of inactivity; a cold start may take around a minute. Because session cookies are in the backend's process memory, any spin-down/redeploy requires the student to obtain a new CAPTCHA and sign in again. Do not treat this free test gateway as a highly available production service. The free plan has monthly resource limits.
 
 ## Run locally
 
@@ -48,7 +64,7 @@ flutter run --dart-define=API_BASE_URL=https://YOUR-GATEWAY-HOST
 flutter build apk --debug --dart-define=API_BASE_URL=https://YOUR-GATEWAY-HOST
 ```
 
-Without `API_BASE_URL`, both builds offer a clearly labelled demo, and live sign-in is disabled. Android localhost refers to the phone, not your laptop. No paid hosting resource is provisioned by this repository.
+Without `API_BASE_URL`, both builds offer a clearly labelled demo, and live sign-in is disabled. If a live build shows no CAPTCHA, first confirm that the login form is visible and the build used the correct `API_BASE_URL`. The client automatically requests the CAPTCHA on opening the login screen and also provides **New CAPTCHA** for a manual retry. A gateway/API error is shown above the login form; do not try to work around ERP CAPTCHA or MFA. Android localhost refers to the phone, not your laptop. No paid hosting resource is provisioned by this repository.
 
 ## GitHub builds
 

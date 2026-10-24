@@ -47,6 +47,16 @@ class _HomeState extends State<Home> {
   List<Map<String, dynamic>> years = [], semesters = [];
   List<Attendance> rows = [];
   @override
+  void initState() {
+    super.initState();
+    if (apiBase.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) run(challenge);
+      });
+    }
+  }
+
+  @override
   void dispose() {
     pageScroll.dispose();
     id.dispose();
@@ -128,16 +138,40 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> challenge() async {
-    if (token != null) await api('/api/session', method: 'DELETE');
+    // An expired gateway session must not prevent requesting a new CAPTCHA.
+    if (token != null) {
+      try {
+        await api('/api/session', method: 'DELETE');
+      } catch (_) {
+        // The old session expires automatically on the gateway.
+      }
+    }
     token = null;
+    if (!mounted) return;
     setState(() {
       captchaImage = null;
       captcha.clear();
     });
     final data = await api('/api/challenge', method: 'POST');
+    final newToken = data['token'];
+    final newImage = data['captcha'];
+    if (newToken is! String ||
+        newToken.isEmpty ||
+        newImage is! String ||
+        newImage.isEmpty) {
+      throw Exception('Gateway sent an incomplete CAPTCHA. Try New CAPTCHA.');
+    }
+    try {
+      if (base64Decode(newImage).isEmpty) {
+        throw const FormatException('Empty image');
+      }
+    } on FormatException {
+      throw Exception('CAPTCHA image is corrupted. Try New CAPTCHA.');
+    }
+    if (!mounted) return;
     setState(() {
-      token = data['token'] as String;
-      captchaImage = data['captcha'] as String;
+      token = newToken;
+      captchaImage = newImage;
     });
   }
 
@@ -392,7 +426,12 @@ class _HomeState extends State<Home> {
                         child: Image.memory(
                           base64Decode(captchaImage!),
                           height: 75,
+                          fit: BoxFit.contain,
                           semanticLabel: 'ERP CAPTCHA challenge',
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Text(
+                            'CAPTCHA image cannot be displayed. Tap New CAPTCHA.',
+                          ),
                         ),
                       ),
                     TextButton.icon(
@@ -400,9 +439,11 @@ class _HomeState extends State<Home> {
                           busy || apiBase.isEmpty ? null : () => run(challenge),
                       icon: const Icon(Icons.refresh),
                       label: Text(
-                        captchaImage == null
-                            ? 'Load ERP CAPTCHA'
-                            : 'New CAPTCHA',
+                        busy
+                            ? 'Loading CAPTCHA…'
+                            : captchaImage == null
+                                ? 'Load ERP CAPTCHA'
+                                : 'New CAPTCHA',
                       ),
                     ),
                     TextFormField(
@@ -417,7 +458,7 @@ class _HomeState extends State<Home> {
                     ),
                     const SizedBox(height: 24),
                     FilledButton(
-                      onPressed: busy || apiBase.isEmpty || captchaImage == null
+                      onPressed: busy || apiBase.isEmpty || token == null || captchaImage == null
                           ? null
                           : () => run(login),
                       child: const Padding(
@@ -435,7 +476,7 @@ class _HomeState extends State<Home> {
                     const Padding(
                       padding: EdgeInsets.only(top: 12),
                       child: Text(
-                        'Demo build: CAPTCHA and sign-in are unavailable. Use a connected build for your real attendance. You can explore sample data below.',
+                        'Demo build: a backend API URL was not included at build time. Rebuild with --dart-define=API_BASE_URL=https://YOUR-GATEWAY-HOST to enable ERP login and CAPTCHA.',
                       ),
                     ),
                 ],

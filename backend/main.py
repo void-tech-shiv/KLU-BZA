@@ -103,13 +103,15 @@ async def challenge():
     try:
         r = await erp.request(client, 'GET', '/')
         action, hidden, image_url = erp.login_form(r.text)
-        img = await erp.request(client, 'GET', image_url)
-        mime = img.headers.get('content-type', '').split(';')[0]
-        if mime not in ('image/png','image/jpeg','image/gif'):
-            raise erp.ERPError('ERP CAPTCHA image is unavailable.')
+        img = await erp.request(
+            client, 'GET', image_url,
+            headers={'Referer': str(r.url), 'Accept': 'image/png,image/jpeg,image/gif,image/webp,*/*;q=0.8',
+                     'Cache-Control': 'no-cache'},
+        )
+        captcha_bytes = erp.captcha_image(img)
         token = secrets.token_urlsafe(32)
         sessions[token] = Session(client, action=action, hidden=hidden)
-        return {'token': token, 'captcha': base64.b64encode(img.content).decode(), 'expires_in': TTL}
+        return {'token': token, 'captcha': base64.b64encode(captcha_bytes).decode(), 'expires_in': TTL}
     except Exception:
         await client.aclose()
         raise
