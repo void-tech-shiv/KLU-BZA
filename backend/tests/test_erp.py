@@ -371,6 +371,6 @@ def test_gateway_sends_search_button_to_erp(monkeypatch):
         )
         r=client.get('/api/attendance?year=26&semester=1',
                      headers={'Authorization':'Bearer search-test'})
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         assert r.json()['rows'][0]['attended'] == 18
         assert len(calls) == 2
