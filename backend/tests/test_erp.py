@@ -507,3 +507,51 @@ def test_safe_ajax_html_fragment_wrapper_and_existing_ltps():
         assert data[0]['component'] == 'L'
     with pytest.raises(erp.ERPError):
         erp.parse_attendance(json.dumps({'data': [{'attended': 15, 'total': 20}]}))
+
+
+def test_dynamic_attendance_form_with_different_post_action():
+    """Same-origin action may differ from the page that renders the form."""
+    html = ATTENDANCE_AJAX_FORM.replace(
+        'action="' + ATTENDANCE_AJAX_PATH + '"',
+        'action="/index.php?r=studentattendance%2Fstudentdailyattendance%2Findex"')
+    f = erp.attendance_form(html, erp.ORIGIN + ATTENDANCE_AJAX_PATH)
+    assert f['method'] == 'POST'
+    assert not erp.known_attendance_search(f['url'])
+    assert erp.known_attendance_search(f['referer'])
+    assert erp.attendance_ajax_form(f)
+    assert erp.attendance_layout_code(html, f).endswith('-R01-M1-X1')
+
+
+def test_unverified_dynamic_form_stays_non_ajax():
+    html = ATTENDANCE_AJAX_FORM.replace(
+        'action="' + ATTENDANCE_AJAX_PATH + '"', 'action="/index.php?r=unrelated%2Fpath"')
+    f = erp.attendance_form(html, erp.ORIGIN + '/index.php?r=unrelated%2Fpage')
+    assert not erp.attendance_ajax_form(f)
+    assert erp.attendance_layout_code(html, f).endswith('-R00-M1-X0')
+
+
+def test_same_origin_dynamic_form_posts_extra_semester_and_xhr(monkeypatch):
+    main.rates.clear()
+    html = ATTENDANCE_AJAX_FORM.replace(
+        'action="' + ATTENDANCE_AJAX_PATH + '"',
+        'action="/index.php?r=studentattendance%2Fstudentdailyattendance%2Findex"')
+    observed = []
+    async def fake(client, method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        if method == 'GET':
+            return httpx.Response(200, text=html,
+                   request=httpx.Request('GET', erp.ORIGIN + ATTENDANCE_AJAX_PATH))
+        assert kwargs['data']['DynamicModel[semester]'] == '1'
+        assert kwargs['headers']['X-Requested-With'] == 'XMLHttpRequest'
+        return httpx.Response(200, text=TABLE,
+                   request=httpx.Request('POST', erp.safe_url(path)))
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['split-action-test'] = main.Session(
+            httpx.AsyncClient(), authenticated=True,
+            page='<a href="' + ATTENDANCE_AJAX_PATH + '">Attendance Register</a>')
+        r = c.get('/api/attendance?year=26&semester=1',
+             headers={'Authorization':'Bearer split-action-test'})
+        assert r.status_code == 200, r.text
+        assert r.json()['rows'][0]['conducted'] == 20
+        assert len(observed) == 2
