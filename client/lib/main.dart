@@ -1,10 +1,12 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'attendance.dart';
+import 'official_erp_import.dart';
 
 const apiBase = String.fromEnvironment('API_BASE_URL');
 const officialErp = 'https://newerp.kluniversity.in';
@@ -244,6 +246,40 @@ class _HomeState extends State<Home> {
           .toString()
           .split('.')
           .first;
+    });
+  }
+
+  Future<void> importOfficialAttendance() async {
+    if (year == null || semester == null) {
+      throw Exception('Choose an academic year and semester first.');
+    }
+    // WebView is native Android/iOS. The Flutter web build can still open
+    // the verified official attendance page in a browser.
+    if (kIsWeb) {
+      await openOfficial('attendance');
+      return;
+    }
+    final selectedYear = years.firstWhere(
+      (option) => option['value'] == year,
+      orElse: () => {'label': ''},
+    )['label'] as String;
+    final selectedSemester = semesters.firstWhere(
+      (option) => option['value'] == semester,
+      orElse: () => {'label': ''},
+    )['label'] as String;
+    final imported = await Navigator.of(context).push<List<Attendance>>(
+      MaterialPageRoute(
+        builder: (_) => OfficialErpImportView(
+          expectedYear: selectedYear,
+          expectedSemester: selectedSemester,
+        ),
+      ),
+    );
+    if (!mounted || imported == null) return;
+    setState(() {
+      rows = imported;
+      synced = 'Imported locally · ${DateTime.now().toLocal().toString().split('.').first}';
+      error = null;
     });
   }
 
@@ -638,12 +674,22 @@ class _HomeState extends State<Home> {
                   years.isEmpty ? 'Load filters' : 'Refresh attendance',
                 ),
               ),
-              if (!demo)
+              if (!demo) ...[
                 OutlinedButton.icon(
-                  onPressed: busy ? null : () => run(() => openOfficial('attendance')),
+                  onPressed: busy
+                      ? null
+                      : () => run(() => openOfficial('attendance')),
                   icon: const Icon(Icons.open_in_new),
                   label: const Text('Official attendance page'),
                 ),
+                FilledButton.tonalIcon(
+                  onPressed: busy ? null : () => run(importOfficialAttendance),
+                  icon: const Icon(Icons.file_download_outlined),
+                  label: Text(kIsWeb
+                      ? 'Open ERP attendance in browser'
+                      : 'Import from official ERP (on-device)'),
+                ),
+              ],
             ],
           ),
         ),
@@ -655,6 +701,13 @@ class _HomeState extends State<Home> {
             : 'Last sync: $synced',
         style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
       ),
+      if (!demo)
+        const Text(
+          'Automatic attendance sync is still under verification. '
+          'On Android, you can sign in on the official ERP page and '
+          'import its visible table on this device.',
+          style: TextStyle(color: Colors.blueGrey, fontSize: 12),
+        ),
       const Text('Attendance target'),
       Row(
         children: [
