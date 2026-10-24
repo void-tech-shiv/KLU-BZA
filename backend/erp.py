@@ -128,6 +128,16 @@ def attendance_link(html):
             return safe_url(a['href'])
     raise ERPError('Attendance menu not identified. A sanitized attendance-page HTML sample is needed.')
 
+def known_attendance_search(url):
+    """Recognize a known read-only ERP attendance form route, not arbitrary links."""
+    from urllib.parse import parse_qs
+    canonical = safe_url(url)
+    parts = urlsplit(canonical)
+    route = parse_qs(parts.query).get('r', [])
+    return (parts.path == '/index.php'
+            and route == ['studentattendance/studentdailyattendance/searchgetinput'])
+
+
 def attendance_form(html, page_url):
     s = soup(html)
     for f in s.find_all('form'):
