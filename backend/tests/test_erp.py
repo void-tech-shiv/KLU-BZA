@@ -87,6 +87,9 @@ def test_api_flow_and_session_isolation(monkeypatch):
         elif 'site%2Flogin' in path:
             assert kwargs['data']['LoginForm[password]']=='test-only-password'
             assert kwargs['data']['_csrf']=='csrf'
+            assert kwargs['data']['LoginForm[qr_code]']==''
+            assert kwargs['headers']['Origin']==erp.ORIGIN
+            assert kwargs['headers']['Referer']==erp.ORIGIN+'/'
             text='<a href="/logout">Logout</a><a href="/attendance">Attendance Register</a>'
         elif path.endswith('/attendance'): text=FILTERS
         else:
@@ -171,6 +174,7 @@ def test_optional_stakeholder_lookup_fails_over_to_official_login(monkeypatch):
         assert result.status_code == 401
         assert len(posted) == 1
         assert posted[0]['LoginForm[captcha]'] == 'human-entered-code'
+        assert posted[0]['LoginForm[qr_code]'] == ''
         assert not main.sessions['fallback-test'].authenticated
         assert 'private-password' not in result.text
 
@@ -196,7 +200,8 @@ def test_upstream_login_http_error_identifies_stage_but_hides_secrets(monkeypatc
                         json={'student_id': '123', 'password': 'private-password',
                               'captcha': 'test-code'})
         assert result.status_code == 502
-        assert 'ERP login returned HTTP 403' in result.text
+        assert 'HTTP 403 Forbidden' in result.text
+        assert 'official ERP' in result.text
         assert 'private-password' not in result.text
         assert not main.sessions['error-test'].authenticated
 
