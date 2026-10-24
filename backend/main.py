@@ -245,7 +245,19 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
         if erp.soup(r.text).select_one('form#login-form'):
             session.authenticated = False
             raise HTTPException(401, 'ERP session expired. Please sign in again.')
-        return {'rows': erp.parse_attendance(r.text), 'synced_at': datetime.now(timezone.utc).isoformat()}
+        try:
+            rows = erp.parse_attendance(r.text)
+        except erp.ERPError as exc:
+            # For filter-only responses, add a fixed-category diagnostic; do
+            # not return ERP HTML, user input, URLs, or login information.
+            if str(exc).startswith('ERP returned attendance filters but no readable course table'):
+                code = erp.attendance_layout_code(r.text, f)
+                raise erp.ERPError(
+                    'ERP returned filters without attendance rows. '
+                    f'Diagnostic {code}. Please share only this code, '
+                    'not your ERP password or page source.') from None
+            raise
+        return {'rows': rows, 'synced_at': datetime.now(timezone.utc).isoformat()}
 
 @app.delete('/api/session')
 async def logout(request: Request):
