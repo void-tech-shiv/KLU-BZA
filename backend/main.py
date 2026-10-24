@@ -261,10 +261,12 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
             # not return ERP HTML, user input, URLs, or login information.
             if str(exc).startswith('ERP returned attendance filters but no readable course table'):
                 code = erp.attendance_layout_code(r.text, f)
+                response_code = erp.attendance_response_code(r, f, year, semester)
                 raise erp.ERPError(
                     'ERP returned filters without attendance rows. '
-                    f'Diagnostic {code}. Please share only this code, '
-                    'not your ERP password or page source.') from None
+                    f'Diagnostic {code}-{response_code}. '
+                    'Please share only this code, not your ERP password or page source.'
+                ) from None
             raise
         return {'rows': rows, 'synced_at': datetime.now(timezone.utc).isoformat()}
 
