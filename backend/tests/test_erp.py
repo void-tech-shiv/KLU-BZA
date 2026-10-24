@@ -354,14 +354,14 @@ def test_gateway_sends_search_button_to_erp(monkeypatch):
         calls.append((method, path, kwargs))
         if 'attendance' in path and 'params' not in kwargs:
             return httpx.Response(200, text=FILTERS_WITH_SEARCH,
-                                  request=httpx.Request('GET', erp.ORIGIN + path))
+                                  request=httpx.Request('GET', erp.safe_url(path)))
         if 'attendance' in path and 'params' in kwargs:
             assert kwargs['params']['yt0'] == 'Search'
             assert kwargs['params']['Attendance[academicyear]'] == '26'
             assert kwargs['params']['Attendance[semesterid]'] == '1'
             assert kwargs['headers']['Referer'].startswith(erp.ORIGIN)
             return httpx.Response(200, text=TABLE,
-                                  request=httpx.Request('GET', erp.ORIGIN + path))
+                                  request=httpx.Request('GET', erp.safe_url(path)))
         raise AssertionError('unexpected mocked route')
     monkeypatch.setattr(erp, 'request', fake)
     with TestClient(main.app) as client:
