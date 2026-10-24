@@ -150,7 +150,7 @@ def attendance_form(html, page_url):
                     continue
                 name = button.get('name', '')
                 label = (button.get('value', '') or button.get_text(' ', strip=True)).strip()
-                if not re.fullmatch(r'[a-zA-Z0-9_\\[\\].-]{1,80}', name):
+                if not re.fullmatch(r'[a-zA-Z0-9_\[\].-]{1,80}', name):
                     continue
                 # Only recognized search actions; never forward another action
                 # such as Delete/Export/Print or a value containing student data.
