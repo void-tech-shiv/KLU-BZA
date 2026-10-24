@@ -157,12 +157,27 @@ async def login(data: Login, session: Session = Depends(get_session)):
                 data={**session.hidden,
                       'LoginForm[username]': data.student_id,
                       'LoginForm[password]': data.password.get_secret_value(),
-                      'LoginForm[captcha]': data.captcha, 'login-button': ''},
+                      'LoginForm[captcha]': data.captcha,
+                      # Present even when empty in the university's public HTML form.
+                      'LoginForm[qr_code]': '',
+                      'login-button': ''},
+                headers={
+                    # Match ordinary browser form semantics for origin/CSRF checks.
+                    # Never skip the ERP's own CAPTCHA or access restrictions.
+                    'Origin': erp.ORIGIN,
+                    'Referer': erp.ORIGIN + '/',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                },
             )
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                raise HTTPException(
+                    502, 'ERP rejected the login request (HTTP 403 Forbidden). '
+                         'This may be a session/CSRF issue or a university-side access restriction. '
+                         'Use the official ERP in your browser rather than repeatedly retrying.')
             raise HTTPException(
                 502, f'ERP login returned HTTP {exc.response.status_code}. '
-                     'Try again with a fresh CAPTCHA, or use the official ERP.')
+                     'Use the official ERP if the problem persists.')
         except httpx.TransportError:
             raise HTTPException(
                 502, 'ERP login connection timed out or failed. '
