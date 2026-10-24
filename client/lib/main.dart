@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:webview_flutter/webview_flutter.dart' show WebViewCookieManager;
 
 import 'attendance.dart';
 import 'erp_browser_routes.dart';
@@ -352,6 +353,16 @@ class _HomeState extends State<Home> {
     try {
       if (token != null) await api('/api/session', method: 'DELETE');
     } finally {
+      // Signing out of the app also clears this app's embedded ERP browser
+      // cookies, so a later student cannot inherit the previous account.
+      // The system Chrome profile is separate and remains untouched.
+      if (!demo && !kIsWeb) {
+        try {
+          await WebViewCookieManager().clearCookies();
+        } catch (_) {
+          // Cloud logout and local state cleanup still proceed.
+        }
+      }
       id.clear();
       password.clear();
       captcha.clear();
