@@ -235,3 +235,92 @@ def test_upstream_mfa_and_rate_limit_do_not_submit_password(monkeypatch):
             assert result.status_code == status
             assert not post_calls
             assert not main.sessions[token].authenticated
+
+
+def test_safe_login_failure_classification():
+    captcha = LOGIN.replace(
+        '<img id="loginFormCaptcha-image"',
+        '<div id="field-loginform-captcha" class="has-error">'
+        '<div class="help-block">Some untrusted upstream text 123</div></div>'
+        '<img id="loginFormCaptcha-image"')
+    credentials = LOGIN.replace(
+        '<img id="loginFormCaptcha-image"',
+        '<div id="field-loginform-password" class="has-error"></div>'
+        '<img id="loginFormCaptcha-image"')
+    assert erp.login_failure_reason(captcha) == 'captcha'
+    assert erp.login_failure_reason(credentials) == 'credentials'
+    assert erp.login_failure_reason(LOGIN) == 'unconfirmed'
+    assert erp.login_failure_reason('<h1>Temporary upstream issue</h1>') == 'unconfirmed'
+    assert not erp.authenticated(LOGIN + '<form action="/site/logout"></form>')
+    assert erp.authenticated('<form action="/index.php?r=site%2Flogout"></form>')
+    assert 'untrusted' not in str(erp.login_failure_reason(captcha))
+
+
+@pytest.mark.parametrize('kind,message', [
+    ('captcha', 'ERP rejected the CAPTCHA'),
+    ('password', 'ERP did not accept the sign-in details'),
+])
+def test_server_side_login_field_errors_are_not_echoed(monkeypatch, kind, message):
+    main.rates.clear()
+    details = {
+        'captcha': '<div id="field-loginform-captcha" class="has-error">private error</div>',
+        'password': '<div id="field-loginform-password" class="has-error">private error</div>',
+    }
+    seen_paths = []
+    async def fake(client, method, path, **kwargs):
+        seen_paths.append((method, path))
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200, text='-2')
+        if 'site%2Flogin' in path:
+            return httpx.Response(200, text=LOGIN + details[kind])
+        raise AssertionError('No GET recheck is needed for a recognized login error')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        token='field-error-' + kind
+        main.sessions[token]=main.Session(httpx.AsyncClient(), action=erp.ORIGIN+'/index.php?r=site%2Flogin', hidden={'_csrf': 'fixture'})
+        r=c.post('/api/login', headers={'Authorization':'Bearer '+token},
+                 json={'student_id':'123','password':'secret-password','captcha':'wrong-code'})
+        assert r.status_code == 401
+        assert message in r.text
+        assert 'private error' not in r.text
+        assert 'secret-password' not in r.text
+        assert not main.sessions[token].authenticated
+        assert not any(method=='GET' for method, path in seen_paths)
+
+
+def test_login_intermediate_page_uses_one_safe_get_confirmation(monkeypatch):
+    main.rates.clear()
+    requests = []
+    async def fake(client, method, path, **kwargs):
+        requests.append((method, path))
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200, text='-2')
+        if method == 'POST':
+            return httpx.Response(200, text='<h1>Continuing session</h1>')
+        if method == 'GET' and path == '/':
+            return httpx.Response(200, text='<form action="/site/logout"></form><a href="/attendance">Attendance Register</a>')
+        raise AssertionError('Unexpected request')
+    monkeypatch.setattr(erp, 'request', fake)
+    with TestClient(main.app) as c:
+        main.sessions['intermediate-test'] = main.Session(httpx.AsyncClient(), action=erp.ORIGIN+'/login',hidden={'_csrf':'fixture'})
+        r=c.post('/api/login',headers={'Authorization':'Bearer intermediate-test'},json={'student_id':'123','password':'sample-password','captcha':'human-code'})
+        assert r.status_code==200
+        assert r.json()['authenticated']
+        assert len([q for q in requests if q[0] == 'POST' and 'get-stakeholder-id' not in q[1]])==1
+        assert len([q for q in requests if q[0] == 'GET'])==1
+
+
+def test_unknown_login_response_never_creates_session(monkeypatch):
+    main.rates.clear()
+    async def fake(client, method, path, **kwargs):
+        if 'get-stakeholder-id' in path:
+            return httpx.Response(200,text='-2')
+        return httpx.Response(200,text=LOGIN if method=='GET' else '<h1>Unknown response</h1>')
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        main.sessions['no-evidence'] = main.Session(httpx.AsyncClient(), action=erp.ORIGIN+'/login',hidden={'_csrf':'fixture'})
+        r=c.post('/api/login',headers={'Authorization':'Bearer no-evidence'},json={'student_id':'123','password':'secret-value','captcha':'human-code'})
+        assert r.status_code==401
+        assert 'does not necessarily mean your password is wrong' in r.text
+        assert not main.sessions['no-evidence'].authenticated
+        assert 'secret-value' not in r.text
