@@ -126,16 +126,48 @@ async def login(data: Login, session: Session = Depends(get_session)):
     async with session.lock:
         if session.authenticated:
             raise HTTPException(409, 'Already signed in.')
-        check = await erp.request(session.client, 'POST', '/index.php?r=site%2Fget-stakeholder-id',
-                                  data={**session.hidden, 'username': data.student_id})
-        if check.text.strip() == '1':
-            raise HTTPException(403, 'This account requires MFA. Please use the official ERP.')
-        if check.text.strip() not in ('-2', '-1', '-3'):
-            raise erp.ERPError('ERP could not verify the student login. Retry later.')
-        r = await erp.request(session.client, 'POST', session.action,
-              data={**session.hidden, 'LoginForm[username]': data.student_id,
-                    'LoginForm[password]': data.password.get_secret_value(),
-                    'LoginForm[captcha]': data.captcha, 'login-button': ''})
+        # Stakeholder lookup controls the optional MFA UI on the public ERP form.
+        # A missing/unavailable lookup must not prevent a NORMAL form submission:
+        # ERP itself still validates password, CAPTCHA and any required MFA.
+        # A positive MFA response, rate limit, or unexpected response fails closed.
+        try:
+            check = await erp.request(
+                session.client, 'POST', '/index.php?r=site%2Fget-stakeholder-id',
+                data={**session.hidden, 'username': data.student_id},
+                headers={'X-Requested-With': 'XMLHttpRequest', 'Referer': erp.ORIGIN + '/'},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (404, 405, 500, 502, 503, 504):
+                if exc.response.status_code == 429:
+                    raise HTTPException(429, 'ERP temporarily rate-limited login. Retry later.')
+                raise HTTPException(502,
+                    f'ERP account check returned HTTP {exc.response.status_code}; use the official ERP.')
+        except httpx.TransportError:
+            # The optional AJAX lookup is unreachable; attempt the official login
+            # form exactly once. Never retry a password POST automatically.
+            pass
+        else:
+            if check.text.strip() == '1':
+                raise HTTPException(403, 'This account requires MFA. Please use the official ERP.')
+            if check.text.strip() not in ('-2', '-1', '-3'):
+                raise erp.ERPError('ERP account check returned an unexpected response. Use the official ERP.')
+        try:
+            r = await erp.request(
+                session.client, 'POST', session.action,
+                data={**session.hidden,
+                      'LoginForm[username]': data.student_id,
+                      'LoginForm[password]': data.password.get_secret_value(),
+                      'LoginForm[captcha]': data.captcha, 'login-button': ''},
+            )
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                502, f'ERP login returned HTTP {exc.response.status_code}. '
+                     'Try again with a fresh CAPTCHA, or use the official ERP.')
+        except httpx.TransportError:
+            raise HTTPException(
+                502, 'ERP login connection timed out or failed. '
+                     'Try again later with a new CAPTCHA.')
+
         if not erp.authenticated(r.text):
             raise HTTPException(401, 'Login unsuccessful. Check your details and load a new CAPTCHA.')
         session.authenticated = True
