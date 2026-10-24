@@ -77,12 +77,49 @@ def captcha_image(response):
     return data
 
 
+def has_login_form(html):
+    return soup(html).find('input', attrs={'name': 'LoginForm[password]'}) is not None
+
+
 def authenticated(html):
+    """Require positive sign-in evidence, never infer it from a redirect alone."""
     document = soup(html)
-    # Only treat a page as signed in with positive logout evidence AND no login fields.
     if document.find('input', attrs={'name': 'LoginForm[password]'}) is not None:
         return False
-    return any('logout' in a.get('href', '').lower() for a in document.select('a[href]'))
+    return any('logout' in item.get(attr, '').lower()
+               for attr, selector in (('href', 'a[href]'), ('action', 'form[action]'))
+               for item in document.select(selector))
+
+
+def login_failure_reason(html):
+    """Read only validation structure, not user input or error text.
+
+    Yii form field errors are safe to classify into generic categories.
+    Do NOT include raw upstream HTML/error strings in responses or logs.
+    """
+    document = soup(html)
+    if document.find('input', attrs={'name': 'LoginForm[password]'}) is None:
+        return 'unconfirmed'
+
+    def invalid_field(name):
+        field = document.select_one('#field-loginform-' + name)
+        if field is None:
+            return False
+        classes = set(field.get('class', []))
+        if classes.intersection(('has-error', 'is-invalid', 'error')):
+            return True
+        if field.select_one('[aria-invalid="true"], input.is-invalid, .invalid-feedback'):
+            return True
+        return any(
+            node.get_text(' ', strip=True)
+            for node in field.select('.help-block, .help-block-error, .error-message')
+        )
+
+    if invalid_field('captcha'):
+        return 'captcha'
+    if invalid_field('username') or invalid_field('password'):
+        return 'credentials'
+    return 'unconfirmed'
 
 def attendance_link(html):
     for a in soup(html).select('a[href]'):
