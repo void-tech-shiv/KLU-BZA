@@ -234,11 +234,14 @@ async def attendance(year: str, semester: str, session: Session = Depends(get_se
         f = await filters(session)
         if year not in [x['value'] for x in f['years']] or semester not in [x['value'] for x in f['semesters']]:
             raise HTTPException(400, 'Select an available academic year and semester.')
-        payload = {**f['hidden'], f['year_name']: year, f['semester_name']: semester}
+        payload = {**f['hidden'], f['year_name']: year, f['semester_name']: semester,
+                   **f['submit']}
         if f['method'] not in ('GET','POST'):
             raise erp.ERPError('Unexpected attendance form method.')
-        r = await erp.request(session.client, f['method'], f['url'],
-                              **({'params': payload} if f['method'] == 'GET' else {'data': payload}))
+        r = await erp.request(
+            session.client, f['method'], f['url'],
+            headers={'Referer': f['referer']},
+            **({'params': payload} if f['method'] == 'GET' else {'data': payload}))
         if erp.soup(r.text).select_one('form#login-form'):
             session.authenticated = False
             raise HTTPException(401, 'ERP session expired. Please sign in again.')
