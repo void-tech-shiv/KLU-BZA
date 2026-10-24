@@ -555,3 +555,42 @@ def test_same_origin_dynamic_form_posts_extra_semester_and_xhr(monkeypatch):
         assert r.status_code == 200, r.text
         assert r.json()['rows'][0]['conducted'] == 20
         assert len(observed) == 2
+
+
+def test_upstream_redirect_metadata_detects_post_changed_to_get():
+    async def run():
+        calls=[]
+        def handler(req):
+            calls.append((req.method, str(req.url)))
+            if len(calls) == 1:
+                return httpx.Response(302, headers={'location': '/attendance-home'})
+            return httpx.Response(200, text='<html></html>',
+                                  headers={'content-type': 'text/html'})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            r=await erp.request(client,'POST','/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput',
+                                data={'DynamicModel[academicyear]':'26'})
+            assert [method for method,_ in calls] == ['POST','GET']
+            assert r.extensions['erp_redirects'] == 1
+            assert r.extensions['erp_post_to_get'] is True
+    asyncio.run(run())
+
+
+def test_safe_attendance_response_code_no_values_or_secrets():
+    html = ('<form><select name="DynamicModel[academicyear]">'
+            '<option selected value="26">sensitive ID</option></select>'
+            '<select name="DynamicModel[semesterid]">'
+            '<option selected value="1">Odd</option></select>'
+            '<div class="has-error">private password</div>'
+            '<input name="_csrf" value="SECRET"></form>')
+    response=httpx.Response(
+        200, text=html, headers={'content-type':'text/html; charset=utf-8'})
+    response.extensions.update({'erp_redirects':1,'erp_post_to_get':True})
+    form={'year_name':'DynamicModel[academicyear]',
+          'semester_name':'DynamicModel[semesterid]'}
+    code=erp.attendance_response_code(response,form,'26','1')
+    assert code == 'QH11-SYY-Z11'
+    assert all(v not in code for v in
+               ['SECRET','private password','sensitive ID','DynamicModel','26'])
+    response2=httpx.Response(200,text='<html></html>',
+                             headers={'content-type':'application/json'})
+    assert erp.attendance_response_code(response2,form,'26','1') == 'QJ00-S??-Z00'
