@@ -252,11 +252,24 @@ class _HomeState extends State<Home> {
     if (!erpRoutes.containsKey(module) || module == 'attendance') {
       throw Exception('Unknown ERP module.');
     }
-    final data = await api('/api/modules/$module');
+    // Selecting another module immediately clears the previous student's
+    // module view. Even if parsing fails, the official-ERP link remains usable.
     if (!mounted) return;
     setState(() {
       selectedModule = module;
-      moduleTitle = data['title'] as String? ?? module;
+      moduleTitle = const {
+            'profile': 'Student profile',
+            'cgpa': 'Overall CGPA',
+            'timetable': 'Timetable',
+            'seating': 'Exam seating',
+          }[module] ??
+          module;
+      moduleTables = [];
+    });
+    final data = await api('/api/modules/$module');
+    if (!mounted) return;
+    setState(() {
+      moduleTitle = data['title'] as String? ?? moduleTitle;
       moduleTables = (data['tables'] as List).cast<Map<String, dynamic>>();
     });
   }
@@ -730,6 +743,15 @@ class _HomeState extends State<Home> {
                 Text(moduleTitle ?? selectedModule!,
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
                 const SizedBox(height: 8),
+                if (moduleTables.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No verified records could be shown for this module. '
+                      'Use the official ERP link below to view them directly.',
+                      style: TextStyle(color: Colors.blueGrey),
+                    ),
+                  ),
                 for (final table in moduleTables) ...[
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
