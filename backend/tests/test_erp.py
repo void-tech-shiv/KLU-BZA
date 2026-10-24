@@ -89,3 +89,25 @@ def test_validation_does_not_echo_credentials():
         response=c.post('/api/login',json={'student_id':'bad','password':'SECRET-PASSWORD','captcha':''})
         assert 'SECRET-PASSWORD' not in response.text
         assert response.headers['cache-control']=='no-store'
+
+def test_wrong_login_and_mfa_do_not_authenticate(monkeypatch):
+    main.rates.clear()
+    async def fake(client,method,path,**kwargs):
+        if 'get-stakeholder-id' in path:
+            text = '1' if kwargs['data']['username']=='999' else '-2'
+        else:
+            text = LOGIN
+        return httpx.Response(200,text=text,request=httpx.Request(method,erp.ORIGIN+'/'))
+    monkeypatch.setattr(erp,'request',fake)
+    with TestClient(main.app) as c:
+        session=main.Session(httpx.AsyncClient(trust_env=False),action=erp.ORIGIN+'/login',hidden={'_csrf':'csrf'})
+        main.sessions['test-token']=session
+        headers={'Authorization':'Bearer test-token'}
+        for student_id,status in [('123',401),('999',403)]:
+            r=c.post('/api/login',headers=headers,json={'student_id':student_id,'password':'secret-value','captcha':'wrong'})
+            assert r.status_code==status and not session.authenticated
+            assert 'secret-value' not in r.text
+        r=c.post('/api/login',headers=headers,json={'student_id':'bad','password':'secret-value','captcha':'X'})
+        assert r.status_code==422 and 'secret-value' not in r.text
+        session.created-=main.TTL+1
+        assert c.get('/api/filters',headers=headers).status_code==401
