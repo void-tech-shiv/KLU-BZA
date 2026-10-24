@@ -339,97 +339,103 @@ class _HomeState extends State<Home> {
                     style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                      'Use your ERP ID, password and the CAPTCHA below.'),
+                  const Text(apiBase == ''
+                      ? 'This demo is not connected to the university ERP.'
+                      : 'Use your ERP ID, password and the CAPTCHA below.'),
                   const SizedBox(height: 24),
-                  TextFormField(
-                    controller: id,
-                    enabled: !busy,
-                    keyboardType: TextInputType.number,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: 'Student ID',
-                      prefixIcon: Icon(Icons.badge_outlined),
+                  if (apiBase.isNotEmpty) ...[
+                    TextFormField(
+                      controller: id,
+                      enabled: !busy,
+                      keyboardType: TextInputType.number,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Student ID',
+                        prefixIcon: Icon(Icons.badge_outlined),
+                      ),
+                      validator: (v) =>
+                          RegExp(r'^\d{1,64}$').hasMatch(v?.trim() ?? '')
+                              ? null
+                              : 'Enter your numeric student ID',
                     ),
-                    validator: (v) =>
-                        RegExp(r'^\d{1,64}$').hasMatch(v?.trim() ?? '')
-                            ? null
-                            : 'Enter your numeric student ID',
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: password,
-                    enabled: !busy,
-                    obscureText: hidePassword,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      suffixIcon: IconButton(
-                        tooltip:
-                            hidePassword ? 'Show password' : 'Hide password',
-                        onPressed: () =>
-                            setState(() => hidePassword = !hidePassword),
-                        icon: Icon(
-                          hidePassword
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: password,
+                      enabled: !busy,
+                      obscureText: hidePassword,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          tooltip:
+                              hidePassword ? 'Show password' : 'Hide password',
+                          onPressed: () =>
+                              setState(() => hidePassword = !hidePassword),
+                          icon: Icon(
+                            hidePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                          ),
                         ),
                       ),
+                      validator: (v) => (v == null || v.isEmpty)
+                          ? 'Enter your password'
+                          : null,
                     ),
-                    validator: (v) =>
-                        (v == null || v.isEmpty) ? 'Enter your password' : null,
-                  ),
-                  const SizedBox(height: 18),
-                  if (captchaImage != null)
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      color: Colors.white,
-                      child: Image.memory(
-                        base64Decode(captchaImage!),
-                        height: 75,
-                        semanticLabel: 'ERP CAPTCHA challenge',
+                    const SizedBox(height: 18),
+                    if (captchaImage != null)
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        color: Colors.white,
+                        child: Image.memory(
+                          base64Decode(captchaImage!),
+                          height: 75,
+                          semanticLabel: 'ERP CAPTCHA challenge',
+                        ),
+                      ),
+                    TextButton.icon(
+                      onPressed:
+                          busy || apiBase.isEmpty ? null : () => run(challenge),
+                      icon: const Icon(Icons.refresh),
+                      label: Text(
+                        captchaImage == null
+                            ? 'Load ERP CAPTCHA'
+                            : 'New CAPTCHA',
                       ),
                     ),
-                  TextButton.icon(
-                    onPressed:
-                        busy || apiBase.isEmpty ? null : () => run(challenge),
-                    icon: const Icon(Icons.refresh),
-                    label: Text(
-                      captchaImage == null ? 'Load ERP CAPTCHA' : 'New CAPTCHA',
+                    TextFormField(
+                      controller: captcha,
+                      enabled: !busy,
+                      autocorrect: false,
+                      decoration:
+                          const InputDecoration(labelText: 'CAPTCHA code'),
+                      validator: (v) => (v == null || v.trim().isEmpty)
+                          ? 'Enter the code shown above'
+                          : null,
                     ),
-                  ),
-                  TextFormField(
-                    controller: captcha,
-                    enabled: !busy,
-                    autocorrect: false,
-                    decoration:
-                        const InputDecoration(labelText: 'CAPTCHA code'),
-                    validator: (v) => (v == null || v.trim().isEmpty)
-                        ? 'Enter the code shown above'
-                        : null,
-                  ),
-                  const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: busy || apiBase.isEmpty || captchaImage == null
-                        ? null
-                        : () => run(login),
-                    child: const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text('Sign in to ERP'),
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: busy || apiBase.isEmpty || captchaImage == null
+                          ? null
+                          : () => run(login),
+                      child: const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text('Sign in to ERP'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Password is sent through the configured gateway to ERP and is never saved. Sessions stay in memory.',
-                    style: TextStyle(fontSize: 12, color: Colors.blueGrey),
-                  ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Password is sent through the configured gateway to ERP and is never saved. Sessions stay in memory.',
+                      style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+                    ),
+                  ],
                   if (apiBase.isEmpty)
                     const Padding(
                       padding: EdgeInsets.only(top: 12),
                       child: Text(
-                        'Preview build: live ERP gateway is not configured.',
+                        'Demo build: CAPTCHA and sign-in are unavailable. Use a connected build for your real attendance. You can explore sample data below.',
                       ),
                     ),
                 ],
