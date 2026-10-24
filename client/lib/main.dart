@@ -6,17 +6,10 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'attendance.dart';
+import 'erp_browser_routes.dart';
 import 'official_erp_import.dart';
 
 const apiBase = String.fromEnvironment('API_BASE_URL');
-const officialErp = 'https://newerp.kluniversity.in';
-const erpRoutes = <String, String>{
-  'attendance': '/index.php?r=studentattendance%2Fstudentdailyattendance%2Fsearchgetinput',
-  'profile': '/index.php?r=studentinfo%2Fstudentprofileinfo%2Fviewprofileindi',
-  'cgpa': '/index.php?r=studentinfo%2Fstudentendexamresult%2Fsearchgetmycgpa',
-  'timetable': '/index.php?r=timetables%2Funiversitymasteracademictimetableview%2Findexstudentindisearch',
-  'seating': '/index.php?r=examsection%2Fexam-invigilator-student-room-allotment-info%2Fstud_my_seating_plan',
-};
 void main() => runApp(const KluApp());
 
 class KluApp extends StatelessWidget {
@@ -249,29 +242,30 @@ class _HomeState extends State<Home> {
     });
   }
 
-  Future<void> importOfficialAttendance() async {
-    if (year == null || semester == null) {
-      throw Exception('Choose an academic year and semester first.');
+  /// Reuses an official-site WebView across known ERP modules.
+  /// Only attendance has a locally validated import action.
+  Future<void> openErpBrowser(String module) async {
+    if (!erpRoutes.containsKey(module)) {
+      throw Exception('Unknown ERP module.');
     }
-    // WebView is native Android/iOS. The Flutter web build can still open
-    // the verified official attendance page in a browser.
     if (kIsWeb) {
-      await openOfficial('attendance');
+      await openOfficial(module);
       return;
     }
-    final selectedYear = years.firstWhere(
-      (option) => option['value'] == year,
-      orElse: () => {'label': ''},
-    )['label'] as String;
-    final selectedSemester = semesters.firstWhere(
-      (option) => option['value'] == semester,
-      orElse: () => {'label': ''},
-    )['label'] as String;
+    String? labelFor(List<Map<String, dynamic>> options, String? value) {
+      if (value == null) return null;
+      for (final option in options) {
+        if (option['value'] == value) return option['label'] as String?;
+      }
+      return null;
+    }
+
     final imported = await Navigator.of(context).push<List<Attendance>>(
       MaterialPageRoute(
-        builder: (_) => OfficialErpImportView(
-          expectedYear: selectedYear,
-          expectedSemester: selectedSemester,
+        builder: (_) => UnifiedErpBrowserView(
+          initialModule: module,
+          expectedYear: labelFor(years, year),
+          expectedSemester: labelFor(semesters, semester),
         ),
       ),
     );
@@ -281,6 +275,13 @@ class _HomeState extends State<Home> {
       synced = 'Imported locally · ${DateTime.now().toLocal().toString().split('.').first}';
       error = null;
     });
+  }
+
+  Future<void> importOfficialAttendance() async {
+    if (year == null || semester == null) {
+      throw Exception('Choose an academic year and semester first.');
+    }
+    await openErpBrowser('attendance');
   }
 
   Future<void> loadModule(String module) async {
@@ -313,7 +314,7 @@ class _HomeState extends State<Home> {
   Future<void> openOfficial(String name) async {
     final path = erpRoutes[name];
     if (path == null) throw Exception('Unknown ERP module.');
-    final uri = Uri.parse('$officialErp$path');
+    final uri = erpModuleUri(name);
     final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!launched) throw Exception('Could not open official ERP in your browser.');
   }
@@ -675,6 +676,11 @@ class _HomeState extends State<Home> {
                 ),
               ),
               if (!demo) ...[
+                FilledButton.tonalIcon(
+                  onPressed: busy ? null : () => run(() => openErpBrowser('attendance')),
+                  icon: const Icon(Icons.web_outlined),
+                  label: const Text('Open unified ERP Browser'),
+                ),
                 OutlinedButton.icon(
                   onPressed: busy
                       ? null
@@ -772,6 +778,14 @@ class _HomeState extends State<Home> {
           'integration to show their records here.',
           style: TextStyle(color: Colors.blueGrey)),
       const SizedBox(height: 14),
+      if (!kIsWeb) ...[
+        FilledButton.tonalIcon(
+          onPressed: busy ? null : () => run(() => openErpBrowser('attendance')),
+          icon: const Icon(Icons.language_outlined),
+          label: const Text('Open ERP Browser · All modules'),
+        ),
+        const SizedBox(height: 10),
+      ],
       Wrap(
         spacing: 8,
         runSpacing: 8,
@@ -835,13 +849,17 @@ class _HomeState extends State<Home> {
       ],
       if (selectedModule != null)
         TextButton.icon(
-          onPressed: busy ? null : () => run(() => openOfficial(selectedModule!)),
+          onPressed: busy ? null : () => run(() => openErpBrowser(selectedModule!)),
           icon: const Icon(Icons.open_in_new),
-          label: const Text('Open this module on official ERP'),
+          label: const Text('Open this module in ERP Browser'),
         ),
       const SizedBox(height: 8),
-      const Text('Official ERP opens separately in your browser and may ask you to sign in again.',
-          style: TextStyle(color: Colors.blueGrey, fontSize: 12)),
+      const Text(
+        'On Android official modules share one in-app browser session. '
+        'On web they open in an external browser. University sign-in '
+        'may still be required.',
+        style: TextStyle(color: Colors.blueGrey, fontSize: 12),
+      ),
     ];
   }
 
