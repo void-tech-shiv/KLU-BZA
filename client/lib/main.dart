@@ -619,8 +619,8 @@ class _HomeState extends State<Home> {
       ),
       const SizedBox(height: 16),
       if (rows.isEmpty)
-        const Padding(
-          padding: EdgeInsets.all(36),
+        Padding(
+          padding: const EdgeInsets.all(36),
           child: Text(
             synced == null
                 ? 'Attendance not synced yet. No course totals are available.'
