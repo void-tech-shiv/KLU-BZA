@@ -138,9 +138,30 @@ def attendance_form(html, page_url):
             def options(x):
                 return [{'value': o.get('value', ''), 'label': o.get_text(' ', strip=True)}
                         for o in x.select('option') if o.get('value', '') != '']
+            # HTML browsers include the clicked named submit button with the form.
+            # In Yii pages this can be e.g. yt0=Search; omitting it may return
+            # only the filters, with no attendance table at all.
+            submit = {}
+            candidates = []
+            for button in f.select('button, input'):
+                tag = button.name.lower()
+                control_type = button.get('type', 'submit' if tag == 'button' else 'text').lower()
+                if control_type != 'submit' or button.has_attr('disabled'):
+                    continue
+                name = button.get('name', '')
+                label = (button.get('value', '') or button.get_text(' ', strip=True)).strip()
+                if not re.fullmatch(r'[a-zA-Z0-9_\\[\\].-]{1,80}', name):
+                    continue
+                # Only recognized search actions; never forward another action
+                # such as Delete/Export/Print or a value containing student data.
+                if re.fullmatch(r'(search|show|view|submit|get attendance|view attendance)', label, flags=re.I):
+                    candidates.append((name, button.get('value', '') or label))
+            if len(candidates) == 1:
+                submit = {candidates[0][0]: candidates[0][1]}
             return {'url': safe_url(urljoin(page_url, f.get('action') or page_url)),
                     'method': f.get('method', 'get').upper(),
                     'hidden': {i['name']: i.get('value', '') for i in f.select('input[type=hidden][name]')},
+                    'submit': submit, 'referer': safe_url(page_url),
                     'year_name': year['name'], 'semester_name': sem['name'],
                     'years': options(year), 'semesters': options(sem)}
     raise ERPError('Attendance filters not recognized. Integration needs a sanitized page sample.')
@@ -179,4 +200,18 @@ def parse_attendance(html):
         if not rows and not any(t in table.get_text().lower() for t in ['no results', 'no records', 'no data']):
             raise ERPError('Attendance table has no recognizable rows.')
         return rows
-    raise ERPError('Attendance table not recognized. No data has been fabricated.')
+    # Do not pretend an empty filter/search page means 0% attendance.
+    # Error descriptions are structural only: never expose raw ERP HTML,
+    # student identifiers, field values or cookie/session metadata.
+    if document.select('select[name]'):
+        raise ERPError(
+            'ERP returned attendance filters but no readable course table. '
+            'The Search form may use a different submission/AJAX workflow. '
+            'No attendance figures were guessed.')
+    if document.find_all('table'):
+        raise ERPError(
+            'ERP returned a table with unfamiliar attendance columns. '
+            'No attendance figures were guessed.')
+    raise ERPError(
+        'ERP returned no attendance table for the selected year and semester. '
+        'No attendance figures were guessed.')
