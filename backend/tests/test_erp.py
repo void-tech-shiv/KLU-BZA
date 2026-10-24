@@ -389,7 +389,7 @@ def test_structure_diagnostic_exposes_no_credentials_or_attendance():
     for secret in ('private-roll-number', 'sensitive-CSRF-secret', 'student-private-data', '2026-2027'):
         assert secret not in code
     assert erp.attendance_layout_code('<html><table></table></html>',
-                                      {'method':'POST', 'submit':{'yt0':'Search'}}) == 'AT-PY-T1-D0-J0'
+                                      {'method':'POST', 'submit':{'yt0':'Search'}}) == 'AT-PY-T1-D0-J0-R00-M0-X0'
 
 
 def test_filter_only_response_returns_safe_layout_code(monkeypatch):
